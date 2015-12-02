@@ -1,0 +1,6 @@
+WITH RECURSIVE t(path) AS (
+        SELECT path FROM mfs WHERE parent = '/'
+    UNION ALL
+        SELECT mfs.path FROM t, mfs WHERE mfs.parent = t.path
+)
+SELECT * FROM t;
