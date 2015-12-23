@@ -259,34 +259,48 @@ func (d *Driver) Delete(ctx context.Context, path string) error {
 	}
 	defer tx.Rollback()
 
-	var deleted []string
-	if path != "/" {
-		deleted = append(deleted, path)
-		if _, err := tx.Exec("DELETE FROM mfs WHERE mfs.path = $1", path); err != nil {
-			return err
-		}
-	}
-
-	// TODO: we don't need path actually. Our target is MDS.ID to mark deleted files
-	rows, err := tx.Query(`
-	WITH RECURSIVE t(path) AS (
-	        SELECT path FROM mfs WHERE parent = $1
-	    UNION ALL
-	        SELECT mfs.path FROM t, mfs WHERE mfs.parent = t.path
+	var (
+		deleted []sql.NullInt64
+		mdsid   sql.NullInt64
+		isDir   = false
 	)
-	DELETE FROM mfs USING t WHERE mfs.path = t.path RETURNING mfs.path;
-	`, path)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+	if path != "/" {
+		err = tx.QueryRow("DELETE FROM mfs WHERE mfs.path = $1 RETURNING mfs.mdsid, mfs.dir", path).Scan(&mdsid, &isDir)
+		if err != nil {
 			return err
 		}
-		deleted = append(deleted, name)
+
+		if mdsid.Valid {
+			deleted = append(deleted, mdsid)
+		}
+	}
+
+	// NOTE: scan for childs only if a directory is being deleted
+	if isDir {
+		// TODO: it's possible to add optimization for dir only RECURSIVE scanning
+		rows, err := tx.Query(`
+			WITH RECURSIVE t(path) AS (
+			        SELECT path FROM mfs WHERE parent = $1
+			    UNION ALL
+			        SELECT mfs.path FROM t, mfs WHERE mfs.parent = t.path
+			)
+			DELETE FROM mfs USING t WHERE mfs.path = t.path RETURNING mfs.mdsid;
+		`, path)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			if err := rows.Scan(&mdsid); err != nil {
+				return err
+			}
+
+			if mdsid.Valid {
+				deleted = append(deleted, mdsid)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
