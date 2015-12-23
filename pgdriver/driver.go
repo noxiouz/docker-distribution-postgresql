@@ -111,7 +111,6 @@ func (d *Driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *Driver) PutContent(ctx context.Context, path string, content []byte) error {
-	fmt.Println(path)
 	tx, err := d.db.Begin()
 	if err != nil {
 		return err
@@ -197,7 +196,20 @@ func (d *Driver) WriteStream(ctx context.Context, path string, offset int64, rea
 // Stat retrieves the FileInfo for the given path, including the current
 // size in bytes and the creation time.
 func (d *Driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
-	return nil, notimplemented
+	info := storagedriver.FileInfoFields{
+		Path: path,
+	}
+
+	// NOTE: should size of directory be evaluated as total size of its childs?
+	err := d.db.QueryRow("SELECT dir, size, modtime FROM mfs WHERE path=$1", path).Scan(&info.IsDir, &info.Size, &info.ModTime)
+	switch err {
+	case sql.ErrNoRows:
+		return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
+	case nil:
+		return &storagedriver.FileInfoInternal{info}, nil
+	default:
+		return nil, err
+	}
 }
 
 // List returns a list of the objects that are direct descendants of the
@@ -265,7 +277,6 @@ func (d *Driver) Delete(ctx context.Context, path string) error {
 	DELETE FROM mfs USING t WHERE mfs.path = t.path RETURNING mfs.path;
 	`, path)
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
 	defer rows.Close()
