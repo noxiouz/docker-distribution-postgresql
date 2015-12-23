@@ -1,1 +1,1 @@
-## docker-distribution-mongo
+## docker-distribution-postgresql
