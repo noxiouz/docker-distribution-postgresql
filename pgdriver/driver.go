@@ -204,7 +204,7 @@ func (d *Driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	err := d.db.QueryRow("SELECT dir, size, modtime FROM mfs WHERE path=$1", path).Scan(&info.IsDir, &info.Size, &info.ModTime)
 	switch err {
 	case sql.ErrNoRows:
-		return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
+		return nil, storagedriver.PathNotFoundError{Path: path}
 	case nil:
 		return &storagedriver.FileInfoInternal{info}, nil
 	default:
@@ -220,7 +220,7 @@ func (d *Driver) List(ctx context.Context, path string) ([]string, error) {
 		var ph interface{}
 		switch err := d.db.QueryRow("SELECT 1 FROM mfs WHERE path=$1", path).Scan(&ph); err {
 		case sql.ErrNoRows:
-			return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
+			return nil, storagedriver.PathNotFoundError{Path: path}
 		case nil:
 			// pass
 		default:
@@ -248,7 +248,58 @@ func (d *Driver) List(ctx context.Context, path string) ([]string, error) {
 // Move moves an object stored at sourcePath to destPath, removing the
 // original object.
 func (d *Driver) Move(ctx context.Context, sourcePath string, destPath string) error {
-	return notimplemented
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1")
+	if err != nil {
+		return err
+	}
+	defer checkStmt.Close()
+
+	// Check that the source exists and is a file.
+	var isDir = false
+	switch err := checkStmt.QueryRow(sourcePath).Scan(&isDir); err {
+	case sql.ErrNoRows:
+		return storagedriver.PathNotFoundError{Path: sourcePath}
+	case nil:
+		if isDir {
+			return fmt.Errorf("source `%s` is a directory. Moving directories is not supported", sourcePath)
+		}
+	default:
+		return err
+	}
+
+	// Check that the dest is not a directory.
+	switch err := checkStmt.QueryRow(destPath).Scan(&isDir); err {
+	case sql.ErrNoRows:
+		// TODO: check if a parent dir exists
+	case nil:
+		if isDir {
+			return fmt.Errorf("destination `%s` is a directory. Moving directories is not supported", destPath)
+		}
+	default:
+		return err
+	}
+
+	// TODO: looks ugly. Actually I can merge previous queries here by adding dir = true
+	// Delete source record and update dest record with some fields
+	_, err = tx.Exec(`
+					WITH t AS (DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid)
+					UPDATE mfs SET (size, modtime, mdsid) = (t.size, now(), t.mdsid)
+					FROM t WHERE mfs.path = $2;`, sourcePath, destPath)
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
