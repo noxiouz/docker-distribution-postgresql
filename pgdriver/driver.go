@@ -346,10 +346,23 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 	// Check that the dest is not a directory.
 	switch err := checkStmt.QueryRow(destPath).Scan(&isDir); err {
 	case sql.ErrNoRows:
-		// TODO: check if a parent dir exists
+		parent := filepath.Dir(destPath)
+		var (
+			size  int64
+			mdsid sql.NullInt64
+		)
+
+		if err := tx.QueryRow(`DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid`, sourcePath).Scan(&size, &mdsid); err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(`INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, false, $3, now(), $4)`, destPath, parent, size, mdsid)
+		if err != nil {
+			return err
+		}
 
 		// checkStmt check if the file or dir exists and returns its type
-		checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1 LIMIT 1")
+		checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1")
 		if err != nil {
 			return err
 		}
@@ -359,8 +372,6 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		if err != nil {
 			return err
 		}
-
-		parent := filepath.Dir(destPath)
 	DIRECTORY_CREATION_LOOP:
 		for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
 			var (
@@ -390,17 +401,17 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		if isDir {
 			return fmt.Errorf("destination `%s` is a directory. Moving directories is not supported", destPath)
 		}
+		// TODO: looks ugly. Actually I can merge previous queries here by adding dir = true
+		// Delete source record and update dest record with some fields
+		r, err := tx.Exec(`
+			WITH t AS (DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid)
+			UPDATE mfs SET (size, modtime, mdsid) = (t.size, now(), t.mdsid)
+			FROM t WHERE mfs.path = $2;`, sourcePath, destPath)
+		if err != nil {
+			return err
+		}
+		fmt.Println(r.RowsAffected())
 	default:
-		return err
-	}
-
-	// TODO: looks ugly. Actually I can merge previous queries here by adding dir = true
-	// Delete source record and update dest record with some fields
-	_, err = tx.Exec(`
-					WITH t AS (DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid)
-					UPDATE mfs SET (size, modtime, mdsid) = (t.size, now(), t.mdsid)
-					FROM t WHERE mfs.path = $2;`, sourcePath, destPath)
-	if err != nil {
 		return err
 	}
 
