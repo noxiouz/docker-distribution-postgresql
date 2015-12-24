@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"path/filepath"
 
 	"github.com/docker/distribution/context"
@@ -20,8 +19,6 @@ import (
 )
 
 var (
-	_              = log.Print
-	notimplemented = errors.New("not implemneted yet")
 	// ErrNoDirectURLForDirectory means that URLFor points to a directory
 	ErrNoDirectURLForDirectory = errors.New("no direct URL for directory")
 )
