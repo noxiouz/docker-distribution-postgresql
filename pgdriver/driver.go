@@ -137,17 +137,17 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func (d *driver) getKey(ctx context.Context, path string) (string, error) {
-	var key string
-	err := d.db.QueryRow("SELECT mds.name FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&key)
+func (d *driver) getKey(ctx context.Context, path string) ([]byte, error) {
+	var keymeta []byte
+	err := d.db.QueryRow("SELECT mds.keymeta FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&keymeta)
 	switch err {
 	case sql.ErrNoRows:
 		// NOTE: actually it also means that the path is a directory
-		return "", storagedriver.PathNotFoundError{Path: path}
+		return nil, storagedriver.PathNotFoundError{Path: path}
 	case nil:
-		return key, nil
+		return keymeta, nil
 	default:
-		return "", err
+		return nil, err
 	}
 }
 
@@ -194,7 +194,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 
 	var mdsid int64
-	if err := d.db.QueryRow("INSERT INTO mds (name) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
+	if err := d.db.QueryRow("INSERT INTO mds (keymeta) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
 		return 0, err
 	}
 

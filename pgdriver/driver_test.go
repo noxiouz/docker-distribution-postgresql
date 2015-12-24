@@ -41,7 +41,7 @@ func init() {
 	// create tables
 	if _, err := db.Exec(`CREATE TABLE mds (
 		ID	SERIAL 	PRIMARY KEY,
-		NAME VARCHAR(256) NOT NULL UNIQUE
+		KEYMETA VARCHAR(256) NOT NULL UNIQUE
 		);`); err != nil {
 		panic(err)
 	}

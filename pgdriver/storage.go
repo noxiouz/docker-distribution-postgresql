@@ -11,9 +11,9 @@ import (
 )
 
 type BinaryStorage interface {
-	Store(data io.Reader) (key string, nn int64, err error)
-	Get(key string, offset int64) (io.ReadCloser, error)
-	// Delete(key string) error
+	Store(data io.Reader) ([]byte, int64, error)
+	Get(meta []byte, offset int64) (io.ReadCloser, error)
+	Delete(meta []byte) error
 }
 
 type inmemory struct {
@@ -21,10 +21,10 @@ type inmemory struct {
 	data map[string][]byte
 }
 
-func genKey() string {
+func genKey() []byte {
 	h := md5.New()
 	io.CopyN(h, rand.Reader, 1024)
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return []byte(fmt.Sprintf("%x", h.Sum(nil)))
 }
 
 func newInMemory() (BinaryStorage, error) {
@@ -33,26 +33,26 @@ func newInMemory() (BinaryStorage, error) {
 	}, nil
 }
 
-func (i *inmemory) Store(data io.Reader) (string, int64, error) {
+func (i *inmemory) Store(data io.Reader) ([]byte, int64, error) {
 	i.Lock()
 	defer i.Unlock()
 
-	key := genKey()
+	keymeta := genKey()
 	buff := new(bytes.Buffer)
 	if _, err := io.Copy(buff, data); err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
-	i.data[key] = buff.Bytes()
-	return key, int64(buff.Len()), nil
+	i.data[string(keymeta)] = buff.Bytes()
+	return keymeta, int64(buff.Len()), nil
 }
 
-func (i *inmemory) Get(key string, offset int64) (io.ReadCloser, error) {
+func (i *inmemory) Get(keymeta []byte, offset int64) (io.ReadCloser, error) {
 	i.Lock()
 	defer i.Unlock()
 
-	data, ok := i.data[key]
+	data, ok := i.data[string(keymeta)]
 	if !ok {
-		return nil, fmt.Errorf("no such key: %s", key)
+		return nil, fmt.Errorf("no such key: %s", keymeta)
 	}
 
 	if offset > 0 {
@@ -60,4 +60,11 @@ func (i *inmemory) Get(key string, offset int64) (io.ReadCloser, error) {
 	}
 
 	return ioutil.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (i *inmemory) Delete(keymeta []byte) error {
+	i.Lock()
+	defer i.Unlock()
+	delete(i.data, string(keymeta))
+	return nil
 }
