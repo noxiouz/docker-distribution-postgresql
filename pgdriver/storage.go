@@ -11,8 +11,8 @@ import (
 )
 
 type BinaryStorage interface {
-	Store(data io.Reader) (key string, err error)
-	Get(key string) (io.ReadCloser, error)
+	Store(data io.Reader) (key string, nn int64, err error)
+	Get(key string, offset int64) (io.ReadCloser, error)
 	// Delete(key string) error
 }
 
@@ -33,26 +33,30 @@ func newInMemory() (BinaryStorage, error) {
 	}, nil
 }
 
-func (i *inmemory) Store(data io.Reader) (string, error) {
+func (i *inmemory) Store(data io.Reader) (string, int64, error) {
 	i.Lock()
 	defer i.Unlock()
 
 	key := genKey()
 	buff := new(bytes.Buffer)
 	if _, err := io.Copy(buff, data); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	i.data[key] = buff.Bytes()
-	return key, nil
+	return key, int64(buff.Len()), nil
 }
 
-func (i *inmemory) Get(key string) (io.ReadCloser, error) {
+func (i *inmemory) Get(key string, offset int64) (io.ReadCloser, error) {
 	i.Lock()
 	defer i.Unlock()
 
 	data, ok := i.data[key]
 	if !ok {
 		return nil, fmt.Errorf("no such key: %s", key)
+	}
+
+	if offset > 0 {
+		data = data[offset:]
 	}
 
 	return ioutil.NopCloser(bytes.NewReader(data)), nil

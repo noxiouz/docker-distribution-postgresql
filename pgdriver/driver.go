@@ -121,19 +121,12 @@ func (d *driver) Name() string {
 // GetContent retrieves the content stored at "path" as a []byte.
 // This should primarily be used for small objects.
 func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
-	var key string
-	err := d.db.QueryRow("SELECT mds.name FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&key)
-	switch err {
-	case sql.ErrNoRows:
-		// NOTE: actually it also means that the path is a directory
-		return nil, storagedriver.PathNotFoundError{Path: path}
-	case nil:
-		// pass
-	default:
+	key, err := d.getKey(ctx, path)
+	if err != nil {
 		return nil, err
 	}
 
-	reader, err := d.storage.Get(key)
+	reader, err := d.storage.Get(key, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -147,36 +140,65 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+func (d *driver) getKey(ctx context.Context, path string) (string, error) {
+	var key string
+	err := d.db.QueryRow("SELECT mds.name FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&key)
+	switch err {
+	case sql.ErrNoRows:
+		// NOTE: actually it also means that the path is a directory
+		return "", storagedriver.PathNotFoundError{Path: path}
+	case nil:
+		return key, nil
+	default:
+		return "", err
+	}
+}
+
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *driver) PutContent(ctx context.Context, path string, content []byte) error {
-	key, err := d.storage.Store(bytes.NewReader(content))
-	if err != nil {
+	if _, err := d.WriteStream(ctx, path, 0, bytes.NewReader(content)); err != nil {
 		return err
+	}
+	return nil
+}
+
+// WriteStream stores the contents of the provided io.ReadCloser at a
+// location designated by the given path.
+// May be used to resume writing a stream by providing a nonzero offset.
+// The offset must be no larger than the CurrentSize for this path.
+func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
+	if offset != 0 {
+		return 0, fmt.Errorf("write offsetting is not supported")
+	}
+
+	key, nn, err := d.storage.Store(reader)
+	if err != nil {
+		return nn, err
 	}
 	// TODO: delete the key if tx is rollbacked
 
 	tx, err := d.db.Begin()
 	if err != nil {
-		return err
+		return nn, err
 	}
 	defer tx.Rollback()
 
 	// checkStmt check if the file or dir exists and returns its type
 	checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1 LIMIT 1")
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// insertStmt inserts metainformation about file or dir
 	insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, $3, $4, now(), $5)")
 	if err != nil {
-		return err
+		return
 	}
 
 	var mdsid int64
 	if err := d.db.QueryRow("INSERT INTO mds (name) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Check and insert file
@@ -184,21 +206,23 @@ func (d *driver) PutContent(ctx context.Context, path string, content []byte) er
 	switch err := checkStmt.QueryRow(path).Scan(&isDir); err {
 	case nil:
 		if isDir {
-			return fmt.Errorf("unable to rewrite directory by file: %s", path)
+			return 0, fmt.Errorf("unable to rewrite directory by file: %s", path)
 		}
 		if _, err := tx.Exec("DELETE FROM mfs WHERE path=$1", path); err != nil {
-			return err
+			return 0, err
 		}
 	case sql.ErrNoRows:
 		// pass
 	default:
-		return err
-	}
-	// NOTE: may be update would be usefull
-	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, int64(len(content)), mdsid); err != nil {
-		return err
+		return 0, err
 	}
 
+	// NOTE: may be update would be usefull
+	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, offset+nn, mdsid); err != nil {
+		return 0, err
+	}
+
+	// TODO: wrap into a function
 	parent := filepath.Dir(path)
 DIRECTORY_CREATION_LOOP:
 	for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
@@ -210,37 +234,33 @@ DIRECTORY_CREATION_LOOP:
 		switch err := checkStmt.QueryRow(fullpath).Scan(&isDir); err {
 		case nil:
 			if !isDir {
-				return fmt.Errorf("unable to rewrite file by directory: %s", path)
+				return nn, fmt.Errorf("unable to rewrite file by directory: %s", path)
 			}
 			break DIRECTORY_CREATION_LOOP
 		case sql.ErrNoRows:
 			// pass
 		default:
-			return err
+			return nn, err
 		}
 
 		_, err = insertStmt.Exec(fullpath, dir, true, 0, nil)
 		if err != nil {
-			return err
+			return nn, err
 		}
 	}
 
-	return tx.Commit()
+	return nn, tx.Commit()
 }
 
 // ReadStream retrieves an io.ReadCloser for the content stored at "path"
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
 func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
-	return nil, notimplemented
-}
-
-// WriteStream stores the contents of the provided io.ReadCloser at a
-// location designated by the given path.
-// May be used to resume writing a stream by providing a nonzero offset.
-// The offset must be no larger than the CurrentSize for this path.
-func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
-	return 0, notimplemented
+	key, err := d.getKey(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return d.storage.Get(key, offset)
 }
 
 // Stat retrieves the FileInfo for the given path, including the current
@@ -327,6 +347,45 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 	switch err := checkStmt.QueryRow(destPath).Scan(&isDir); err {
 	case sql.ErrNoRows:
 		// TODO: check if a parent dir exists
+
+		// checkStmt check if the file or dir exists and returns its type
+		checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1 LIMIT 1")
+		if err != nil {
+			return err
+		}
+
+		// insertStmt inserts metainformation about file or dir
+		insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, $3, $4, now(), $5)")
+		if err != nil {
+			return err
+		}
+
+		parent := filepath.Dir(destPath)
+	DIRECTORY_CREATION_LOOP:
+		for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
+			var (
+				fullpath = filepath.Join(dir, filename)
+				isDir    = false
+			)
+
+			switch err := checkStmt.QueryRow(fullpath).Scan(&isDir); err {
+			case nil:
+				if !isDir {
+					return fmt.Errorf("unable to rewrite file by directory: %s", destPath)
+				}
+				break DIRECTORY_CREATION_LOOP
+			case sql.ErrNoRows:
+				// pass
+			default:
+				return err
+			}
+
+			_, err = insertStmt.Exec(fullpath, dir, true, 0, nil)
+			if err != nil {
+				return err
+			}
+		}
+
 	case nil:
 		if isDir {
 			return fmt.Errorf("destination `%s` is a directory. Moving directories is not supported", destPath)
@@ -419,5 +478,6 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 // URLFor returns a URL which may be used to retrieve the content stored at
 // the given path, possibly using the given options.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
-	return "", notimplemented
+	// TODO: implement it
+	return "", storagedriver.ErrUnsupportedMethod{}
 }
