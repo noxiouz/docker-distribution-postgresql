@@ -56,6 +56,9 @@ func init() {
 			);`); err != nil {
 		panic(err)
 	}
+	if _, err := db.Exec(`CREATE INDEX parent_idx ON mfs (parent);`); err != nil {
+		panic(err)
+	}
 
 	testsuites.RegisterSuite(func() (storagedriver.StorageDriver, error) {
 		return pgdriverNew(&cfg)

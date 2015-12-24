@@ -6,3 +6,4 @@ CREATE TABLE mfs (
             MODTIME TIME NOT NULL,
             MDSID INT references mds(ID)
 );
+CREATE INDEX parent_idx ON mfs (parent);
