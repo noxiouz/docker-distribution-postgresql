@@ -15,6 +15,7 @@ import (
 
 	"github.com/mitchellh/mapstructure"
 
+	// PostgreSQL backend for database/sql
 	_ "github.com/lib/pq"
 )
 
@@ -76,7 +77,7 @@ type baseEmbed struct {
 	base.Base
 }
 
-// Driver stores metadata in MongoDB and data in a remote storage with HTTP API
+// Driver implements Storage interface. It uses PostgreSQL and plain KV storage to save data
 type Driver struct {
 	baseEmbed
 }
@@ -95,8 +96,6 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		return nil, err
 	}
 
-	// NOTE: move it to a separate SQL file
-	// NOTE: create index over Parent
 	d := &Driver{
 		baseEmbed: baseEmbed{
 			Base: base.Base{
@@ -182,7 +181,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	defer tx.Rollback()
 
 	// checkStmt check if the file or dir exists and returns its type
-	checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1 LIMIT 1")
+	checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1")
 	if err != nil {
 		return 0, err
 	}
@@ -279,8 +278,7 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	}
 }
 
-// List returns a list of the objects that are direct descendants of the
-//given path.
+// List returns a list of the objects that are direct descendants of the given path.
 func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 	//NOTE: should I use Tx?
 	if path != "/" {
