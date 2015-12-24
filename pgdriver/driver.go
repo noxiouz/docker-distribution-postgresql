@@ -1,6 +1,7 @@
 package pgdriver
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -69,18 +70,26 @@ func (f *factoryPostgreDriver) Create(parameters map[string]interface{}) (storag
 	return pgdriverNew(&config)
 }
 
-type baseEmbeded struct {
+type driver struct {
+	db      *sql.DB
+	storage BinaryStorage
+}
+
+type baseEmbed struct {
 	base.Base
 }
 
 // Driver stores metadata in MongoDB and data in a remote storage with HTTP API
 type Driver struct {
-	baseEmbeded
-
-	db *sql.DB
+	baseEmbed
 }
 
 func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
+	st, err := newInMemory()
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open(driverSQLName, cfg.ConnectionString())
 	if err != nil {
 		return nil, err
@@ -92,25 +101,61 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 	// NOTE: move it to a separate SQL file
 	// NOTE: create index over Parent
 	d := &Driver{
-		db: db,
+		baseEmbed: baseEmbed{
+			Base: base.Base{
+				StorageDriver: &driver{
+					db:      db,
+					storage: st,
+				},
+			},
+		},
 	}
 	return d, nil
 }
 
 // Name returns the driver name
-func (d *Driver) Name() string {
+func (d *driver) Name() string {
 	return driverName
 }
 
 // GetContent retrieves the content stored at "path" as a []byte.
 // This should primarily be used for small objects.
-func (d *Driver) GetContent(ctx context.Context, path string) ([]byte, error) {
-	return nil, notimplemented
+func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
+	var key string
+	err := d.db.QueryRow("SELECT mds.name FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&key)
+	switch err {
+	case sql.ErrNoRows:
+		// NOTE: actually it also means that the path is a directory
+		return nil, storagedriver.PathNotFoundError{Path: path}
+	case nil:
+		// pass
+	default:
+		return nil, err
+	}
+
+	reader, err := d.storage.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	var output = new(bytes.Buffer)
+	if _, err := io.Copy(output, reader); err != nil {
+		return nil, err
+	}
+
+	return output.Bytes(), nil
 }
 
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
-func (d *Driver) PutContent(ctx context.Context, path string, content []byte) error {
+func (d *driver) PutContent(ctx context.Context, path string, content []byte) error {
+	key, err := d.storage.Store(bytes.NewReader(content))
+	if err != nil {
+		return err
+	}
+	// TODO: delete the key if tx is rollbacked
+
 	tx, err := d.db.Begin()
 	if err != nil {
 		return err
@@ -124,8 +169,13 @@ func (d *Driver) PutContent(ctx context.Context, path string, content []byte) er
 	}
 
 	// insertStmt inserts metainformation about file or dir
-	insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime) VALUES ($1, $2, $3, $4, now())")
+	insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, $3, $4, now(), $5)")
 	if err != nil {
+		return err
+	}
+
+	var mdsid int64
+	if err := d.db.QueryRow("INSERT INTO mds (name) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
 		return err
 	}
 
@@ -145,7 +195,7 @@ func (d *Driver) PutContent(ctx context.Context, path string, content []byte) er
 		return err
 	}
 	// NOTE: may be update would be usefull
-	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, int64(len(content))); err != nil {
+	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, int64(len(content)), mdsid); err != nil {
 		return err
 	}
 
@@ -169,7 +219,7 @@ DIRECTORY_CREATION_LOOP:
 			return err
 		}
 
-		_, err = insertStmt.Exec(fullpath, dir, true, 0)
+		_, err = insertStmt.Exec(fullpath, dir, true, 0, nil)
 		if err != nil {
 			return err
 		}
@@ -181,7 +231,7 @@ DIRECTORY_CREATION_LOOP:
 // ReadStream retrieves an io.ReadCloser for the content stored at "path"
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
-func (d *Driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
+func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
 	return nil, notimplemented
 }
 
@@ -189,13 +239,13 @@ func (d *Driver) ReadStream(ctx context.Context, path string, offset int64) (io.
 // location designated by the given path.
 // May be used to resume writing a stream by providing a nonzero offset.
 // The offset must be no larger than the CurrentSize for this path.
-func (d *Driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
+func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
 	return 0, notimplemented
 }
 
 // Stat retrieves the FileInfo for the given path, including the current
 // size in bytes and the creation time.
-func (d *Driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
 	info := storagedriver.FileInfoFields{
 		Path: path,
 	}
@@ -204,7 +254,7 @@ func (d *Driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	err := d.db.QueryRow("SELECT dir, size, modtime FROM mfs WHERE path=$1", path).Scan(&info.IsDir, &info.Size, &info.ModTime)
 	switch err {
 	case sql.ErrNoRows:
-		return nil, storagedriver.PathNotFoundError{Path: path}
+		return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
 	case nil:
 		return &storagedriver.FileInfoInternal{info}, nil
 	default:
@@ -214,13 +264,13 @@ func (d *Driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 
 // List returns a list of the objects that are direct descendants of the
 //given path.
-func (d *Driver) List(ctx context.Context, path string) ([]string, error) {
+func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 	//NOTE: should I use Tx?
 	if path != "/" {
 		var ph interface{}
 		switch err := d.db.QueryRow("SELECT 1 FROM mfs WHERE path=$1", path).Scan(&ph); err {
 		case sql.ErrNoRows:
-			return nil, storagedriver.PathNotFoundError{Path: path}
+			return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
 		case nil:
 			// pass
 		default:
@@ -247,7 +297,7 @@ func (d *Driver) List(ctx context.Context, path string) ([]string, error) {
 
 // Move moves an object stored at sourcePath to destPath, removing the
 // original object.
-func (d *Driver) Move(ctx context.Context, sourcePath string, destPath string) error {
+func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) error {
 	tx, err := d.db.Begin()
 	if err != nil {
 		return err
@@ -303,7 +353,7 @@ func (d *Driver) Move(ctx context.Context, sourcePath string, destPath string) e
 }
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
-func (d *Driver) Delete(ctx context.Context, path string) error {
+func (d *driver) Delete(ctx context.Context, path string) error {
 	tx, err := d.db.Begin()
 	if err != nil {
 		return err
@@ -318,13 +368,17 @@ func (d *Driver) Delete(ctx context.Context, path string) error {
 
 	if path != "/" {
 		err = tx.QueryRow("DELETE FROM mfs WHERE mfs.path = $1 RETURNING mfs.mdsid, mfs.dir", path).Scan(&mdsid, &isDir)
-		if err != nil {
+		switch err {
+		case nil:
+			if mdsid.Valid {
+				deleted = append(deleted, mdsid)
+			}
+		case sql.ErrNoRows:
+			return storagedriver.PathNotFoundError{Path: path}
+		default:
 			return err
 		}
 
-		if mdsid.Valid {
-			deleted = append(deleted, mdsid)
-		}
 	}
 
 	// NOTE: scan for childs only if a directory is being deleted
@@ -364,6 +418,6 @@ func (d *Driver) Delete(ctx context.Context, path string) error {
 
 // URLFor returns a URL which may be used to retrieve the content stored at
 // the given path, possibly using the given options.
-func (d *Driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
+func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
 	return "", notimplemented
 }
