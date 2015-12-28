@@ -2,29 +2,15 @@ package pgdriver
 
 import (
 	"bytes"
-	"crypto/md5"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"sync"
 )
 
-type BinaryStorage interface {
-	Store(data io.Reader) ([]byte, int64, error)
-	Get(meta []byte, offset int64) (io.ReadCloser, error)
-	Delete(meta []byte) error
-}
-
 type inmemory struct {
 	sync.Mutex
 	data map[string][]byte
-}
-
-func genKey() []byte {
-	h := md5.New()
-	io.CopyN(h, rand.Reader, 1024)
-	return []byte(fmt.Sprintf("%x", h.Sum(nil)))
 }
 
 func newInMemory() (BinaryStorage, error) {

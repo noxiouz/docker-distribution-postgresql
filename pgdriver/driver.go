@@ -39,6 +39,8 @@ func init() {
 type postgreDriverConfig struct {
 	User     string
 	Database string
+	Type     string
+	Options  map[string]interface{}
 }
 
 func (p *postgreDriverConfig) ConnectionString() string {
@@ -47,21 +49,25 @@ func (p *postgreDriverConfig) ConnectionString() string {
 
 type factoryPostgreDriver struct{}
 
+func decodeConfig(parameters map[string]interface{}, config interface{}) error {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           config,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return decoder.Decode(parameters)
+}
+
 func (f *factoryPostgreDriver) Create(parameters map[string]interface{}) (storagedriver.StorageDriver, error) {
 	var (
 		config postgreDriverConfig
 	)
 
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &config,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	err = decoder.Decode(parameters)
-	if err != nil {
+	if err := decodeConfig(parameters, &config); err != nil {
 		return nil, err
 	}
 
@@ -83,7 +89,18 @@ type Driver struct {
 }
 
 func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
-	st, err := newInMemory()
+	var (
+		st  BinaryStorage
+		err error
+	)
+	switch cfg.Type {
+	case "inmemory":
+		st, err = newInMemory()
+	case "mds":
+		st, err = newMDSBinStorage(cfg.Options)
+	default:
+		return nil, fmt.Errorf("Unsupported binadry storage backend %s", cfg.Type)
+	}
 	if err != nil {
 		return nil, err
 	}

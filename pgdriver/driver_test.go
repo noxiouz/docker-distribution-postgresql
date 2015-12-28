@@ -16,6 +16,7 @@ func init() {
 	cfg := postgreDriverConfig{
 		User:     "noxiouz",
 		Database: "distribution",
+		Type:     "inmemory",
 	}
 
 	db, err := sql.Open(driverSQLName, cfg.ConnectionString())
