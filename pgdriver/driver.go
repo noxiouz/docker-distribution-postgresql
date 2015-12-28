@@ -164,6 +164,9 @@ func (d *driver) PutContent(ctx context.Context, path string, content []byte) er
 // May be used to resume writing a stream by providing a nonzero offset.
 // The offset must be no larger than the CurrentSize for this path.
 func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
+	// NOTE: right now writting with offset is not supported by MDS, so there's no point to implemnet it now.
+	// It could be added to testing backend, but it should UPDATE if key already exist and insert if it does not.
+	// TODO: support stream writting in test backend, return this error from MDS backend directly.
 	if offset != 0 {
 		return 0, fmt.Errorf("write offsetting is not supported")
 	}
@@ -213,7 +216,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		return 0, err
 	}
 
-	// NOTE: may be update would be usefull
+	// NOTE: may be update would be useful
+	// NOTE: calculate size properly
 	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, offset+nn, mdsid); err != nil {
 		return 0, err
 	}
@@ -398,14 +402,13 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		}
 		// TODO: looks ugly. Actually I can merge previous queries here by adding dir = true
 		// Delete source record and update dest record with some fields
-		r, err := tx.Exec(`
+		_, err := tx.Exec(`
 			WITH t AS (DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid)
 			UPDATE mfs SET (size, modtime, mdsid) = (t.size, now(), t.mdsid)
 			FROM t WHERE mfs.path = $2;`, sourcePath, destPath)
 		if err != nil {
 			return err
 		}
-		fmt.Println(r.RowsAffected())
 	default:
 		return err
 	}
