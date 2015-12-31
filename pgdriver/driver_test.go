@@ -2,6 +2,8 @@ package pgdriver
 
 import (
 	"database/sql"
+	"os"
+	"strconv"
 	"testing"
 
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
@@ -13,9 +15,30 @@ import (
 func Test(t *testing.T) { TestingT(t) }
 
 func init() {
+
+	fromEnvOrDefault := func(envvar, defval string) string {
+		val := os.Getenv(envvar)
+		if val != "" {
+			return val
+		}
+		return defval
+	}
+	// To test in CI
+	user := fromEnvOrDefault("PG_USER", "noxiouz")
+	database := fromEnvOrDefault("PG_DB", "distribution")
+	password := fromEnvOrDefault("PG_PASSWORD", "")
+	host := fromEnvOrDefault("POSTGRES_HOST", "")
+	port, err := strconv.ParseUint(fromEnvOrDefault("POSTGRES_PORT", "5432"), 10, 64)
+	if err != nil {
+		panic(err)
+	}
+
 	cfg := postgreDriverConfig{
-		User:     "noxiouz",
-		Database: "distribution",
+		User:     user,
+		Database: database,
+		Password: password,
+		Host:     host,
+		Port:     uint(port),
 		Type:     "inmemory",
 	}
 

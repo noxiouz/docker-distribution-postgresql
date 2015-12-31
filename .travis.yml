@@ -1,0 +1,22 @@
+language: go
+
+go:
+  - 1.5
+  - tip
+
+sudo: false
+
+services:
+  - postgresql
+
+addons:
+  postgresql: "9.3"
+
+before_script:
+  - psql -c 'create database distribution;' -U postgres
+
+script:
+  - go test -test.v -test.short -coverprofile=coverage.txt -covermode=atomic github.com/noxiouz/docker-distribution-postgresql/pgdriver
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)

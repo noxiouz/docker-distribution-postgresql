@@ -1,6 +1,0 @@
-- type: serial
-  services:
-  - distribution_pgdriver
-  - postgres
-  steps:
-  - command: go test -test.short -test.v github.com/noxiouz/docker-distribution-postgresql/pgdriver
