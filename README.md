@@ -8,6 +8,9 @@ This driver stores metadata for files in PostgreSQL and binary data in a KV stor
 storage:
     postgres:
         user: "noxiouz"
+        password: "pass"
+        host: "localhost"
+        port: 5432
         database: "distribution"
         type: "mds"
         options:
