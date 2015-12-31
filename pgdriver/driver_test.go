@@ -42,14 +42,14 @@ func init() {
 	// create tables
 	if _, err := db.Exec(`CREATE TABLE mds (
 		ID	SERIAL 	PRIMARY KEY,
-		KEYMETA VARCHAR(256) NOT NULL UNIQUE
+		KEYMETA TEXT NOT NULL UNIQUE
 		);`); err != nil {
 		panic(err)
 	}
 
 	if _, err := db.Exec(`CREATE TABLE mfs (
-				PATH 	VARCHAR(256) PRIMARY KEY UNIQUE,
-				PARENT	VARCHAR(256) NOT NULL,
+				PATH 	TEXT PRIMARY KEY UNIQUE,
+				PARENT	TEXT NOT NULL,
 				DIR		BOOLEAN NOT NULL,
 				SIZE 	INTEGER NOT NULL,
 				MODTIME TIME NOT NULL,
