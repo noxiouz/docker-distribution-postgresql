@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"time"
 
 	"github.com/docker/distribution/context"
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
@@ -37,14 +38,36 @@ func init() {
 }
 
 type postgreDriverConfig struct {
-	User     string
-	Database string
-	Type     string
-	Options  map[string]interface{}
+	User           string
+	Password       string
+	Database       string
+	Host           string
+	Port           uint
+	ConnectTimeout time.Duration
+
+	Type    string
+	Options map[string]interface{}
 }
 
 func (p *postgreDriverConfig) ConnectionString() string {
-	return fmt.Sprintf("user=%s dbname=%s sslmode=disable", p.User, p.Database)
+	var buff = new(bytes.Buffer)
+	fmt.Fprintf(buff, "sslmode=disable ")
+	fmt.Fprintf(buff, "user=%s ", p.User)
+	fmt.Fprintf(buff, "dbname=%s ", p.Database)
+
+	if p.Password != "" {
+		fmt.Fprintf(buff, "password='%s' ", p.Password)
+	}
+	if p.Port != 0 {
+		fmt.Fprintf(buff, "port=%d ", p.Port)
+	}
+	if p.Host != "" {
+		fmt.Fprintf(buff, "host=%s ", p.Host)
+	}
+	if p.ConnectTimeout != 0 {
+		fmt.Fprintf(buff, "connect_timeout=%d ", p.ConnectTimeout/time.Second)
+	}
+	return buff.String()
 }
 
 type factoryPostgreDriver struct{}
