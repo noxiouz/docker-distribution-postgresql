@@ -15,6 +15,7 @@ import (
 	"github.com/docker/distribution/registry/storage/driver/factory"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/noxiouz/go-postgresql-cluster/pgcluster"
 
 	// PostgreSQL backend for database/sql
 	_ "github.com/lib/pq"
@@ -73,7 +74,7 @@ func (f *factoryPostgreDriver) Create(parameters map[string]interface{}) (storag
 }
 
 type driver struct {
-	db      *sql.DB
+	cluster *pgcluster.Cluster
 	storage BinaryStorage
 }
 
@@ -103,11 +104,12 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open(driverSQLName, cfg.URLs[0])
+	cluster, err := pgcluster.NewPostgreSQLCluster(driverSQLName, cfg.URLs)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
+
+	if err := cluster.DB(pgcluster.MASTER).Ping(); err != nil {
 		return nil, err
 	}
 
@@ -115,7 +117,7 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		baseEmbed: baseEmbed{
 			Base: base.Base{
 				StorageDriver: &driver{
-					db:      db,
+					cluster: cluster,
 					storage: st,
 				},
 			},
@@ -153,7 +155,7 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 
 func (d *driver) getKey(ctx context.Context, path string) ([]byte, error) {
 	var keymeta []byte
-	err := d.db.QueryRow("SELECT mds.keymeta FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&keymeta)
+	err := d.cluster.DB(pgcluster.MASTER).QueryRow("SELECT mds.keymeta FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&keymeta)
 	switch err {
 	case sql.ErrNoRows:
 		// NOTE: actually it also means that the path is a directory
@@ -192,7 +194,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 	// TODO: delete the key if tx is rollbacked
 
-	tx, err := d.db.Begin()
+	tx, err := d.cluster.DB(pgcluster.MASTER).Begin()
 	if err != nil {
 		return nn, err
 	}
@@ -211,7 +213,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 
 	var mdsid int64
-	if err := d.db.QueryRow("INSERT INTO mds (keymeta) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
+	if err := d.cluster.DB(pgcluster.MASTER).QueryRow("INSERT INTO mds (keymeta) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
 		return 0, err
 	}
 
@@ -286,7 +288,7 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	}
 
 	// NOTE: should size of directory be evaluated as total size of its childs?
-	err := d.db.QueryRow("SELECT dir, size, modtime FROM mfs WHERE path=$1", path).Scan(&info.IsDir, &info.Size, &info.ModTime)
+	err := d.cluster.DB(pgcluster.MASTER).QueryRow("SELECT dir, size, modtime FROM mfs WHERE path=$1", path).Scan(&info.IsDir, &info.Size, &info.ModTime)
 	switch err {
 	case sql.ErrNoRows:
 		return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
@@ -302,7 +304,7 @@ func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 	//NOTE: should I use Tx?
 	if path != "/" {
 		var ph interface{}
-		switch err := d.db.QueryRow("SELECT 1 FROM mfs WHERE path=$1", path).Scan(&ph); err {
+		switch err := d.cluster.DB(pgcluster.MASTER).QueryRow("SELECT 1 FROM mfs WHERE path=$1", path).Scan(&ph); err {
 		case sql.ErrNoRows:
 			return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
 		case nil:
@@ -312,7 +314,7 @@ func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 		}
 	}
 
-	rows, err := d.db.Query("SELECT path FROM mfs WHERE parent=$1", path)
+	rows, err := d.cluster.DB(pgcluster.MASTER).Query("SELECT path FROM mfs WHERE parent=$1", path)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +334,7 @@ func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 // Move moves an object stored at sourcePath to destPath, removing the
 // original object.
 func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) error {
-	tx, err := d.db.Begin()
+	tx, err := d.cluster.DB(pgcluster.MASTER).Begin()
 	if err != nil {
 		return err
 	}
@@ -437,7 +439,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
 func (d *driver) Delete(ctx context.Context, path string) error {
-	tx, err := d.db.Begin()
+	tx, err := d.cluster.DB(pgcluster.MASTER).Begin()
 	if err != nil {
 		return err
 	}

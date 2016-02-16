@@ -24,10 +24,10 @@ func init() {
 		return defval
 	}
 
-	URL := fromEnvOrDefault("PG_URLS", "postgres://noxiouz@localhost:5432/distribution?sslmode=disable")
+	URLs := fromEnvOrDefault("PG_URLS", "postgres://noxiouz@localhost:5432/distribution?sslmode=disable")
 
 	cfg := postgreDriverConfig{
-		URLs: strings.Split(URL, " "),
+		URLs: strings.Split(URLs, " "),
 		Type: "inmemory",
 	}
 

@@ -7,7 +7,7 @@ This driver stores metadata for files in PostgreSQL and binary data in a KV stor
 ```yaml
 storage:
     postgres:
-        URLS:
+        URLs:
           - "postgres://noxiouz@localhost:5432/distribution?sslmode=disable"
         type: "mds"
         options:
