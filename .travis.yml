@@ -13,6 +13,7 @@ addons:
   postgresql: "9.3"
 
 before_script:
+  - cd $GOPATH/src/github.com/docker/distribution && git checkout v2.3.0 || cd -
   - psql -c 'create database distribution;' -U postgres
 
 script:
