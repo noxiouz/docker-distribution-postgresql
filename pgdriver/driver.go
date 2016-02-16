@@ -38,36 +38,11 @@ func init() {
 }
 
 type postgreDriverConfig struct {
-	User           string
-	Password       string
-	Database       string
-	Host           string
-	Port           uint
+	URLs           []string
 	ConnectTimeout time.Duration
 
 	Type    string
 	Options map[string]interface{}
-}
-
-func (p *postgreDriverConfig) ConnectionString() string {
-	var buff = new(bytes.Buffer)
-	fmt.Fprintf(buff, "sslmode=disable ")
-	fmt.Fprintf(buff, "user=%s ", p.User)
-	fmt.Fprintf(buff, "dbname=%s ", p.Database)
-
-	if p.Password != "" {
-		fmt.Fprintf(buff, "password='%s' ", p.Password)
-	}
-	if p.Port != 0 {
-		fmt.Fprintf(buff, "port=%d ", p.Port)
-	}
-	if p.Host != "" {
-		fmt.Fprintf(buff, "host=%s ", p.Host)
-	}
-	if p.ConnectTimeout != 0 {
-		fmt.Fprintf(buff, "connect_timeout=%d ", p.ConnectTimeout/time.Second)
-	}
-	return buff.String()
 }
 
 type factoryPostgreDriver struct{}
@@ -128,7 +103,7 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open(driverSQLName, cfg.ConnectionString())
+	db, err := sql.Open(driverSQLName, cfg.URLs[0])
 	if err != nil {
 		return nil, err
 	}

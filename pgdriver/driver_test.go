@@ -3,7 +3,7 @@ package pgdriver
 import (
 	"database/sql"
 	"os"
-	"strconv"
+	"strings"
 	"testing"
 
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
@@ -23,26 +23,15 @@ func init() {
 		}
 		return defval
 	}
-	// To test in CI
-	user := fromEnvOrDefault("PG_USER", "noxiouz")
-	database := fromEnvOrDefault("PG_DB", "distribution")
-	password := fromEnvOrDefault("PG_PASSWORD", "")
-	host := fromEnvOrDefault("POSTGRES_HOST", "")
-	port, err := strconv.ParseUint(fromEnvOrDefault("POSTGRES_PORT", "5432"), 10, 64)
-	if err != nil {
-		panic(err)
-	}
+
+	URL := fromEnvOrDefault("PG_URLS", "postgres://noxiouz@localhost:5432/distribution?sslmode=disable")
 
 	cfg := postgreDriverConfig{
-		User:     user,
-		Database: database,
-		Password: password,
-		Host:     host,
-		Port:     uint(port),
-		Type:     "inmemory",
+		URLs: strings.Split(URL, " "),
+		Type: "inmemory",
 	}
 
-	db, err := sql.Open(driverSQLName, cfg.ConnectionString())
+	db, err := sql.Open(driverSQLName, cfg.URLs[0])
 	if err != nil {
 		panic(err)
 	}
