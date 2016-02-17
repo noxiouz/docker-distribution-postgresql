@@ -1,5 +1,4 @@
-## docker-distribution-postgresql [![Build Status](https://travis-ci.org/noxiouz/docker-distribution-postgresql.svg?branch=master)](https://travis-ci.org/noxiouz/docker-distribution-postgresql)
-
+## docker-distribution-postgresql [![Build Status](https://travis-ci.org/noxiouz/docker-distribution-postgresql.svg?branch=master)](https://travis-ci.org/noxiouz/docker-distribution-postgresql) [![codecov.io](https://codecov.io/github/noxiouz/docker-distribution-postgresql/coverage.svg?branch=master)](https://codecov.io/github/noxiouz/docker-distribution-postgresql?branch=master)
 This driver stores metadata for files in PostgreSQL and binary data in a KV storage. Currently only Yandex specific KV is supported.
 
 ### Configuration
