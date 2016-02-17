@@ -72,3 +72,7 @@ func (m *mdsBinStorage) Get(metakey []byte, offset int64) (io.ReadCloser, error)
 func (m *mdsBinStorage) Delete(meta []byte) error {
 	return fmt.Errorf("Delete is not implemneted in MDS")
 }
+
+func (m *mdsBinStorage) Append(metakey []byte, data io.Reader, offset int64) (int64, error) {
+	return 0, ErrAppendUnsupported
+}

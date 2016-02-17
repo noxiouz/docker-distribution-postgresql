@@ -154,8 +154,16 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (d *driver) getKey(ctx context.Context, path string) ([]byte, error) {
+	return getKeyViaDB(ctx, d.cluster.DB(pgcluster.MASTER), path)
+}
+
+type rowQuerier interface {
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+func getKeyViaDB(ctx context.Context, db rowQuerier, path string) ([]byte, error) {
 	var keymeta []byte
-	err := d.cluster.DB(pgcluster.MASTER).QueryRow("SELECT mds.keymeta FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&keymeta)
+	err := db.QueryRow("SELECT mds.keymeta FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&keymeta)
 	switch err {
 	case sql.ErrNoRows:
 		// NOTE: actually it also means that the path is a directory
@@ -183,9 +191,36 @@ func (d *driver) PutContent(ctx context.Context, path string, content []byte) er
 func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
 	// NOTE: right now writting with offset is not supported by MDS, so there's no point to implemnet it now.
 	// It could be added to testing backend, but it should UPDATE if key already exist and insert if it does not.
-	// TODO: support stream writting in test backend, return this error from MDS backend directly.
 	if offset != 0 {
-		return 0, fmt.Errorf("write offsetting is not supported")
+		tx, err := d.cluster.DB(pgcluster.MASTER).Begin()
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback()
+
+		keymeta, err := getKeyViaDB(ctx, tx, path)
+		if err != nil {
+			return 0, err
+		}
+
+		nn, err = d.storage.Append(keymeta, reader, offset)
+		switch err {
+		case nil:
+			// NOTE: update size
+			_, err := tx.Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", nn+offset, path)
+			if err != nil {
+				return nn, err
+			}
+
+			return nn, tx.Commit()
+		case ErrAppendUnsupported:
+			return nn, &storagedriver.Error{
+				DriverName: driverName,
+				Enclosed:   fmt.Errorf("BinaryStorage does not support writing with non-zero offset"),
+			}
+		default:
+			return nn, err
+		}
 	}
 
 	key, nn, err := d.storage.Store(reader)
