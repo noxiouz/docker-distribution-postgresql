@@ -54,3 +54,30 @@ func (i *inmemory) Delete(keymeta []byte) error {
 	delete(i.data, string(keymeta))
 	return nil
 }
+
+func (i *inmemory) Append(metakey []byte, data io.Reader, offset int64) (int64, error) {
+	i.Lock()
+	defer i.Unlock()
+
+	body, ok := i.data[string(metakey)]
+	if !ok {
+		return 0, fmt.Errorf("EINVAL OFFSET. NO SUCH FILE %s", metakey)
+	}
+
+	buff := new(bytes.Buffer)
+	nn, err := io.Copy(buff, data)
+	if err != nil {
+		return nn, err
+	}
+
+	if offset > int64(len(body)) {
+		var extended = make([]byte, offset+nn)
+		copy(extended, body)
+		extended = append(extended[:offset], buff.Bytes()...)
+		i.data[string(metakey)] = extended
+	} else {
+		i.data[string(metakey)] = append(body[:offset], buff.Bytes()...)
+	}
+	// fmt.Printf("%d %d %d\n", offset, nn, len(body))
+	return nn, nil
+}
