@@ -465,11 +465,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	return nil
+	return tx.Commit()
 }
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
@@ -481,9 +477,11 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 	defer tx.Rollback()
 
 	var (
+		// NOTE: intended to be used to mark files in MDS table
 		deleted []sql.NullInt64
-		mdsid   sql.NullInt64
-		isDir   = false
+
+		mdsid sql.NullInt64
+		isDir = false
 	)
 
 	if path != "/" {
@@ -528,12 +526,8 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil
-	}
-	// TODO: mark fields in MDS table
-
-	return nil
+	// TODO: mark fields in MDS table before commit from `deleted` array
+	return tx.Commit()
 }
 
 // URLFor returns a URL which may be used to retrieve the content stored at
