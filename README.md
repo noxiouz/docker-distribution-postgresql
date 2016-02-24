@@ -8,6 +8,8 @@ storage:
     postgres:
         URLs:
           - "postgres://noxiouz@localhost:5432/distribution?sslmode=disable"
+        MaxOpenConns: 10
+        MaxIdleConns: 5
         type: "mds"
         options:
             host: "mdshost.yandex.net"
