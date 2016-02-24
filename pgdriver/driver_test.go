@@ -68,7 +68,8 @@ func init() {
 				DIR		BOOLEAN NOT NULL,
 				SIZE 	INTEGER NOT NULL,
 				MODTIME TIME NOT NULL,
-				MDSID INT references mds(ID)
+				MDSID INT references mds(ID),
+				OWNER TEXT
 			);`); err != nil {
 		panic(err)
 	}
