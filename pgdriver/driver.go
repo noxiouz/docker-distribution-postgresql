@@ -41,6 +41,9 @@ func init() {
 type postgreDriverConfig struct {
 	URLs           []string
 	ConnectTimeout time.Duration
+	MaxOpenConns   int
+	// pointer is here to distinguish 0 vlaue from zerovalue by comparing with `nil`
+	MaxIdleConns *int
 
 	Type    string
 	Options map[string]interface{}
@@ -111,6 +114,14 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 
 	if err := cluster.DB(pgcluster.MASTER).Ping(); err != nil {
 		return nil, err
+	}
+
+	if cfg.MaxOpenConns != 0 {
+		cluster.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+
+	if cfg.MaxIdleConns != nil {
+		cluster.SetMaxIdleConns(*cfg.MaxIdleConns)
 	}
 
 	d := &Driver{
