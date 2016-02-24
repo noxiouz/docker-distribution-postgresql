@@ -32,6 +32,12 @@ const (
 
 	tableMeta = "mfs"
 	tableMDS  = "mds"
+
+	// UserNameKey is used to get the user name from a user context
+	// NOTE: This const is defined since > 2.3.0:
+	// github.com/docker/distribution/registry/auth
+	// use it after upgrade
+	UserNameKey = "auth.user.name"
 )
 
 func init() {
@@ -234,6 +240,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		}
 	}
 
+	var owner = ctx.Value(UserNameKey)
+
 	key, nn, err := d.storage.Store(reader)
 	if err != nil {
 		return nn, err
@@ -253,7 +261,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 
 	// insertStmt inserts metainformation about file or dir
-	insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, $3, $4, now(), $5)")
+	insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)")
 	if err != nil {
 		return
 	}
@@ -281,7 +289,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 
 	// NOTE: may be update would be useful
 	// NOTE: calculate size properly
-	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, offset+nn, mdsid); err != nil {
+	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, offset+nn, mdsid, owner); err != nil {
 		return 0, err
 	}
 
@@ -306,7 +314,7 @@ DIRECTORY_CREATION_LOOP:
 			return nn, err
 		}
 
-		_, err = insertStmt.Exec(fullpath, dir, true, 0, nil)
+		_, err = insertStmt.Exec(fullpath, dir, true, 0, nil, owner)
 		if err != nil {
 			return nn, err
 		}
@@ -405,6 +413,8 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		return err
 	}
 
+	var owner = ctx.Value(UserNameKey)
+
 	// Check that the dest is not a directory.
 	switch err := checkStmt.QueryRow(destPath).Scan(&isDir); err {
 	case sql.ErrNoRows:
@@ -418,7 +428,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 			return err
 		}
 
-		_, err = tx.Exec(`INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, false, $3, now(), $4)`, destPath, parent, size, mdsid)
+		_, err = tx.Exec(`INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, false, $3, now(), $4, $5)`, destPath, parent, size, mdsid, owner)
 		if err != nil {
 			return err
 		}
@@ -430,7 +440,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		}
 
 		// insertStmt inserts metainformation about file or dir
-		insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid) VALUES ($1, $2, $3, $4, now(), $5)")
+		insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)")
 		if err != nil {
 			return err
 		}
@@ -453,7 +463,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 				return err
 			}
 
-			_, err = insertStmt.Exec(fullpath, dir, true, 0, nil)
+			_, err = insertStmt.Exec(fullpath, dir, true, 0, nil, owner)
 			if err != nil {
 				return err
 			}
