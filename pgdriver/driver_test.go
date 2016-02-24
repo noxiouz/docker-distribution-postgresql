@@ -26,9 +26,12 @@ func init() {
 
 	URLs := fromEnvOrDefault("PG_URLS", "postgres://noxiouz@localhost:5432/distribution?sslmode=disable")
 
+	var idleConns = 5
 	cfg := postgreDriverConfig{
-		URLs: strings.Split(URLs, " "),
-		Type: "inmemory",
+		MaxOpenConns: 10,
+		MaxIdleConns: &idleConns,
+		URLs:         strings.Split(URLs, " "),
+		Type:         "inmemory",
 	}
 
 	db, err := sql.Open(driverSQLName, cfg.URLs[0])
