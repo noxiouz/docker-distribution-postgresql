@@ -3,7 +3,6 @@ package pgdriver
 import (
 	"bytes"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -19,11 +18,6 @@ import (
 
 	// PostgreSQL backend for database/sql
 	_ "github.com/lib/pq"
-)
-
-var (
-	// ErrNoDirectURLForDirectory means that URLFor points to a directory
-	ErrNoDirectURLForDirectory = errors.New("no direct URL for directory")
 )
 
 const (
@@ -156,7 +150,7 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 
-	reader, err := d.storage.Get(key, 0)
+	reader, err := d.storage.Get(ctx, key, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +214,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			return 0, err
 		}
 
-		nn, err = d.storage.Append(keymeta, reader, offset)
+		nn, err = d.storage.Append(ctx, keymeta, reader, offset)
 		switch err {
 		case nil:
 			// NOTE: update size
@@ -241,8 +235,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 
 	var owner = ctx.Value(UserNameKey)
-
-	key, nn, err := d.storage.Store(reader)
+	key, nn, err := d.storage.Store(ctx, reader)
 	if err != nil {
 		return nn, err
 	}
@@ -331,7 +324,7 @@ func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (io.
 	if err != nil {
 		return nil, err
 	}
-	return d.storage.Get(key, offset)
+	return d.storage.Get(ctx, key, offset)
 }
 
 // Stat retrieves the FileInfo for the given path, including the current

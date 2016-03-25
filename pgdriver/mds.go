@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/ioutil"
 
+	"github.com/docker/distribution/context"
+
 	"github.com/noxiouz/mds"
 )
 
@@ -40,7 +42,7 @@ func newMDSBinStorage(parameters map[string]interface{}) (BinaryStorage, error) 
 	}, nil
 }
 
-func (m *mdsBinStorage) Store(data io.Reader) ([]byte, int64, error) {
+func (m *mdsBinStorage) Store(ctx context.Context, data io.Reader) ([]byte, int64, error) {
 	key := genKey()
 	uinfo, err := m.Storage.Upload(m.Namespace, string(key), ioutil.NopCloser(data))
 	if err != nil {
@@ -60,7 +62,7 @@ func (m *mdsBinStorage) Store(data io.Reader) ([]byte, int64, error) {
 	return metakey, meta.Size, nil
 }
 
-func (m *mdsBinStorage) Get(metakey []byte, offset int64) (io.ReadCloser, error) {
+func (m *mdsBinStorage) Get(ctx context.Context, metakey []byte, offset int64) (io.ReadCloser, error) {
 	var mdsmeta metaInfo
 	if err := json.Unmarshal(metakey, &mdsmeta); err != nil {
 		return nil, err
@@ -69,10 +71,10 @@ func (m *mdsBinStorage) Get(metakey []byte, offset int64) (io.ReadCloser, error)
 	return m.Storage.Get(m.Namespace, mdsmeta.Key, uint64(offset))
 }
 
-func (m *mdsBinStorage) Delete(meta []byte) error {
+func (m *mdsBinStorage) Delete(ctx context.Context, meta []byte) error {
 	return fmt.Errorf("Delete is not implemneted in MDS")
 }
 
-func (m *mdsBinStorage) Append(metakey []byte, data io.Reader, offset int64) (int64, error) {
+func (m *mdsBinStorage) Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error) {
 	return 0, ErrAppendUnsupported
 }
