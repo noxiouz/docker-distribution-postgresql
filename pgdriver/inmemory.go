@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/ioutil"
 	"sync"
+
+	"github.com/docker/distribution/context"
 )
 
 type inmemory struct {
@@ -19,7 +21,7 @@ func newInMemory() (BinaryStorage, error) {
 	}, nil
 }
 
-func (i *inmemory) Store(data io.Reader) ([]byte, int64, error) {
+func (i *inmemory) Store(ctx context.Context, data io.Reader) ([]byte, int64, error) {
 	i.Lock()
 	defer i.Unlock()
 
@@ -32,7 +34,7 @@ func (i *inmemory) Store(data io.Reader) ([]byte, int64, error) {
 	return keymeta, int64(buff.Len()), nil
 }
 
-func (i *inmemory) Get(keymeta []byte, offset int64) (io.ReadCloser, error) {
+func (i *inmemory) Get(ctx context.Context, keymeta []byte, offset int64) (io.ReadCloser, error) {
 	i.Lock()
 	defer i.Unlock()
 
@@ -48,14 +50,14 @@ func (i *inmemory) Get(keymeta []byte, offset int64) (io.ReadCloser, error) {
 	return ioutil.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (i *inmemory) Delete(keymeta []byte) error {
+func (i *inmemory) Delete(ctx context.Context, keymeta []byte) error {
 	i.Lock()
 	defer i.Unlock()
 	delete(i.data, string(keymeta))
 	return nil
 }
 
-func (i *inmemory) Append(metakey []byte, data io.Reader, offset int64) (int64, error) {
+func (i *inmemory) Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error) {
 	i.Lock()
 	defer i.Unlock()
 
