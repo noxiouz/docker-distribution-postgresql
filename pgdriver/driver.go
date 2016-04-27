@@ -108,7 +108,7 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 	case "mds":
 		st, err = newMDSBinStorage(cfg.Options)
 	default:
-		return nil, fmt.Errorf("Unsupported binadry storage backend %s", cfg.Type)
+		return nil, fmt.Errorf("Unsupported binary storage backend %s", cfg.Type)
 	}
 	if err != nil {
 		return nil, err
@@ -525,6 +525,10 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 // URLFor returns a URL which may be used to retrieve the content stored at
 // the given path, possibly using the given options.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
-	// TODO: implement it
-	return "", storagedriver.ErrUnsupportedMethod{}
+	key, err := d.getKey(ctx, path)
+	if err != nil {
+		return "", err
+	}
+
+	return d.storage.URLFor(ctx, key)
 }
