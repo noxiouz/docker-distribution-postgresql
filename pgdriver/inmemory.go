@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"sync"
 
 	"github.com/docker/distribution/context"
@@ -12,13 +15,35 @@ import (
 
 type inmemory struct {
 	sync.Mutex
-	data map[string][]byte
+	baseURL string
+	data    map[string][]byte
 }
 
 func newInMemory() (BinaryStorage, error) {
-	return &inmemory{
+	// NOTE: distribution does not require any kind of Close method,
+	// so there is no possibility to prevent resourse leak
+	driver := &inmemory{
 		data: make(map[string][]byte),
-	}, nil
+	}
+	ts := httptest.NewServer(http.HandlerFunc(driver.serve))
+
+	driver.baseURL = ts.URL
+
+	return driver, nil
+}
+
+func (i *inmemory) serve(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	i.Lock()
+	defer i.Unlock()
+	data, ok := i.data[key]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 func (i *inmemory) Store(ctx context.Context, data io.Reader) ([]byte, int64, error) {
@@ -82,4 +107,15 @@ func (i *inmemory) Append(ctx context.Context, metakey []byte, data io.Reader, o
 	}
 	// fmt.Printf("%d %d %d\n", offset, nn, len(body))
 	return nn, nil
+}
+
+func (i *inmemory) URLFor(ctx context.Context, keymeta []byte) (string, error) {
+	u, err := url.Parse(i.baseURL)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("key", string(keymeta))
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }

@@ -78,3 +78,12 @@ func (m *mdsBinStorage) Delete(ctx context.Context, meta []byte) error {
 func (m *mdsBinStorage) Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error) {
 	return 0, ErrAppendUnsupported
 }
+
+func (m *mdsBinStorage) URLFor(ctx context.Context, metakey []byte) (string, error) {
+	var mdsmeta metaInfo
+	if err := json.Unmarshal(metakey, &mdsmeta); err != nil {
+		return "", err
+	}
+
+	return m.Storage.ReadURL(m.Namespace, mdsmeta.Key), nil
+}

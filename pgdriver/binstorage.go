@@ -15,6 +15,7 @@ type BinaryStorage interface {
 	Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error)
 	Get(ctx context.Context, meta []byte, offset int64) (io.ReadCloser, error)
 	Delete(ctx context.Context, meta []byte) error
+	URLFor(ctx context.Context, meta []byte) (string, error)
 }
 
 // TODO: it is the most stupid implementation
@@ -25,8 +26,6 @@ func genKey() []byte {
 }
 
 var (
-	ErrInvalidOffset = errors.New("invalid offset for append")
-
 	// ErrAppendUnsupported means that a BinaryStorage implementation
 	// does not support write with non-zero offset (append)
 	ErrAppendUnsupported = errors.New("append is not supported")
