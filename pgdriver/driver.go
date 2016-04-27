@@ -34,6 +34,13 @@ const (
 	UserNameKey = "auth.user.name"
 )
 
+const (
+	// checks if the file or dir exists and returns its type
+	checksFileExistsAndGetType = "SELECT dir FROM mfs WHERE path=$1"
+	// inserts metainformation about file or dir
+	insertMetaAboutFileOrDir = "INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)"
+)
+
 func init() {
 	factory.Register(driverName, &factoryPostgreDriver{})
 }
@@ -247,18 +254,6 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 	defer tx.Rollback()
 
-	// checkStmt check if the file or dir exists and returns its type
-	checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1")
-	if err != nil {
-		return 0, err
-	}
-
-	// insertStmt inserts metainformation about file or dir
-	insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)")
-	if err != nil {
-		return
-	}
-
 	var mdsid int64
 	if err := d.cluster.DB(pgcluster.MASTER).QueryRow("INSERT INTO mds (keymeta) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
 		return 0, err
@@ -266,7 +261,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 
 	// Check and insert file
 	var isDir = false
-	switch err := checkStmt.QueryRow(path).Scan(&isDir); err {
+	switch err := tx.QueryRow(checksFileExistsAndGetType, path).Scan(&isDir); err {
 	case nil:
 		if isDir {
 			return 0, fmt.Errorf("unable to rewrite directory by file: %s", path)
@@ -282,7 +277,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 
 	// NOTE: may be update would be useful
 	// NOTE: calculate size properly
-	if _, err := insertStmt.Exec(path, filepath.Dir(path), false, offset+nn, mdsid, owner); err != nil {
+	if _, err := tx.Exec(insertMetaAboutFileOrDir, path, filepath.Dir(path), false, offset+nn, mdsid, owner); err != nil {
 		return 0, err
 	}
 
@@ -295,7 +290,7 @@ DIRECTORY_CREATION_LOOP:
 			isDir    = false
 		)
 
-		switch err := checkStmt.QueryRow(fullpath).Scan(&isDir); err {
+		switch err := tx.QueryRow(checksFileExistsAndGetType, fullpath).Scan(&isDir); err {
 		case nil:
 			if !isDir {
 				return nn, fmt.Errorf("unable to rewrite file by directory: %s", path)
@@ -307,7 +302,7 @@ DIRECTORY_CREATION_LOOP:
 			return nn, err
 		}
 
-		_, err = insertStmt.Exec(fullpath, dir, true, 0, nil, owner)
+		_, err = tx.Exec(insertMetaAboutFileOrDir, fullpath, dir, true, 0, nil, owner)
 		if err != nil {
 			return nn, err
 		}
@@ -387,15 +382,9 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 	}
 	defer tx.Rollback()
 
-	checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1")
-	if err != nil {
-		return err
-	}
-	defer checkStmt.Close()
-
 	// Check that the source exists and is a file.
 	var isDir = false
-	switch err := checkStmt.QueryRow(sourcePath).Scan(&isDir); err {
+	switch err := tx.QueryRow(checksFileExistsAndGetType, sourcePath).Scan(&isDir); err {
 	case sql.ErrNoRows:
 		return storagedriver.PathNotFoundError{Path: sourcePath}
 	case nil:
@@ -409,7 +398,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 	var owner = ctx.Value(UserNameKey)
 
 	// Check that the dest is not a directory.
-	switch err := checkStmt.QueryRow(destPath).Scan(&isDir); err {
+	switch err := tx.QueryRow(checksFileExistsAndGetType, destPath).Scan(&isDir); err {
 	case sql.ErrNoRows:
 		parent := filepath.Dir(destPath)
 		var (
@@ -426,17 +415,6 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 			return err
 		}
 
-		// checkStmt check if the file or dir exists and returns its type
-		checkStmt, err := tx.Prepare("SELECT dir FROM mfs WHERE path=$1")
-		if err != nil {
-			return err
-		}
-
-		// insertStmt inserts metainformation about file or dir
-		insertStmt, err := tx.Prepare("INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)")
-		if err != nil {
-			return err
-		}
 	DIRECTORY_CREATION_LOOP:
 		for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
 			var (
@@ -444,7 +422,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 				isDir    = false
 			)
 
-			switch err := checkStmt.QueryRow(fullpath).Scan(&isDir); err {
+			switch err := tx.QueryRow(checksFileExistsAndGetType, fullpath).Scan(&isDir); err {
 			case nil:
 				if !isDir {
 					return fmt.Errorf("unable to rewrite file by directory: %s", destPath)
@@ -456,7 +434,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 				return err
 			}
 
-			_, err = insertStmt.Exec(fullpath, dir, true, 0, nil, owner)
+			_, err = tx.Exec(insertMetaAboutFileOrDir, fullpath, dir, true, 0, nil, owner)
 			if err != nil {
 				return err
 			}
