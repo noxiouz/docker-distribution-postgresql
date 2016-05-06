@@ -1,3 +1,5 @@
+// +build ignore
+
 package pgdriver
 
 import (
@@ -75,7 +77,7 @@ func (m *mdsBinStorage) Delete(ctx context.Context, meta []byte) error {
 	return fmt.Errorf("Delete is not implemneted in MDS")
 }
 
-func (m *mdsBinStorage) Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error) {
+func (m *mdsBinStorage) Append(ctx context.Context, metakey []byte, data io.Reader) (int64, error) {
 	return 0, ErrAppendUnsupported
 }
 

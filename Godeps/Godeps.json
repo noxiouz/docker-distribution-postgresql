@@ -1,0 +1,88 @@
+{
+	"ImportPath": "github.com/noxiouz/docker-distribution-postgresql",
+	"GoVersion": "go1.6",
+	"GodepVersion": "v60",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/Sirupsen/logrus",
+			"Comment": "v0.7.3",
+			"Rev": "55eb11d21d2a31a3cc93838241d04800f52e823d"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/context",
+			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
+			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/registry/storage/driver",
+			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
+			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/registry/storage/driver/base",
+			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
+			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/registry/storage/driver/factory",
+			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
+			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/registry/storage/driver/testsuites",
+			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
+			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/uuid",
+			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
+			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+		},
+		{
+			"ImportPath": "github.com/gorilla/context",
+			"Rev": "14f550f51af52180c2eefed15e5fd18d63c0a64a"
+		},
+		{
+			"ImportPath": "github.com/gorilla/mux",
+			"Rev": "e444e69cbd2e2e3e0749a2f3c717cec491552bbf"
+		},
+		{
+			"ImportPath": "github.com/lib/pq",
+			"Comment": "go1.0-cutoff-86-gdd3290b",
+			"Rev": "dd3290b2f71a8b30bee8e4e75a337a825263d26f"
+		},
+		{
+			"ImportPath": "github.com/lib/pq/oid",
+			"Comment": "go1.0-cutoff-86-gdd3290b",
+			"Rev": "dd3290b2f71a8b30bee8e4e75a337a825263d26f"
+		},
+		{
+			"ImportPath": "github.com/mitchellh/mapstructure",
+			"Rev": "482a9fd5fa83e8c4e7817413b80f3eb8feec03ef"
+		},
+		{
+			"ImportPath": "github.com/noxiouz/go-postgresql-cluster/pgcluster",
+			"Rev": "44c76f664d3d2a4e7340f1a7e24e9962eeac7b57"
+		},
+		{
+			"ImportPath": "github.com/noxiouz/mds",
+			"Rev": "2cf29dcbb5a9b2641e811142ad0ef181f3151d1d"
+		},
+		{
+			"ImportPath": "github.com/pborman/uuid",
+			"Comment": "v1.0-11-gc55201b",
+			"Rev": "c55201b036063326c5b1b89ccfe45a184973d073"
+		},
+		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "2cba614e8ff920c60240d2677bc019af32ee04e5"
+		},
+		{
+			"ImportPath": "gopkg.in/check.v1",
+			"Rev": "64131543e7896d5bcc6bd5a76287eb75ea96c673"
+		}
+	]
+}

@@ -11,11 +11,11 @@ import (
 )
 
 type BinaryStorage interface {
-	Store(ctx context.Context, data io.Reader) ([]byte, int64, error)
-	Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error)
-	Get(ctx context.Context, meta []byte, offset int64) (io.ReadCloser, error)
-	Delete(ctx context.Context, meta []byte) error
-	URLFor(ctx context.Context, meta []byte) (string, error)
+	Store(ctx context.Context, key string, data io.Reader) (int64, error)
+	Append(ctx context.Context, key string, data io.Reader) (int64, error)
+	Get(ctx context.Context, key string, offset int64) (io.ReadCloser, error)
+	Delete(ctx context.Context, key string) error
+	URLFor(ctx context.Context, key string) (string, error)
 }
 
 // TODO: it is the most stupid implementation

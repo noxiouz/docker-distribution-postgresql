@@ -46,26 +46,29 @@ func (i *inmemory) serve(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (i *inmemory) Store(ctx context.Context, data io.Reader) ([]byte, int64, error) {
+func (i *inmemory) Store(ctx context.Context, key string, data io.Reader) (int64, error) {
 	i.Lock()
 	defer i.Unlock()
 
-	keymeta := genKey()
 	buff := new(bytes.Buffer)
 	if _, err := io.Copy(buff, data); err != nil {
-		return nil, 0, err
+		return 0, err
 	}
-	i.data[string(keymeta)] = buff.Bytes()
-	return keymeta, int64(buff.Len()), nil
+	i.data[key] = buff.Bytes()
+	return int64(buff.Len()), nil
 }
 
-func (i *inmemory) Get(ctx context.Context, keymeta []byte, offset int64) (io.ReadCloser, error) {
+func (i *inmemory) Get(ctx context.Context, key string, offset int64) (io.ReadCloser, error) {
 	i.Lock()
 	defer i.Unlock()
 
-	data, ok := i.data[string(keymeta)]
+	data, ok := i.data[key]
 	if !ok {
-		return nil, fmt.Errorf("no such key: %s", keymeta)
+		return nil, fmt.Errorf("no such key: %s", key)
+	}
+
+	if int64(len(data)) < offset {
+		return nil, fmt.Errorf("invalid offset")
 	}
 
 	if offset > 0 {
@@ -75,20 +78,31 @@ func (i *inmemory) Get(ctx context.Context, keymeta []byte, offset int64) (io.Re
 	return ioutil.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (i *inmemory) Delete(ctx context.Context, keymeta []byte) error {
+// func (i *inmemory) Size(ctx context.Context, key string) (int64, error) {
+// 	i.Lock()
+// 	defer i.Unlock()
+//
+// 	data, ok := i.data[key]
+// 	if !ok {
+// 		return 0, fmt.Errorf("no such key: %s", key)
+// 	}
+// 	return int64(len(data)), nil
+// }
+
+func (i *inmemory) Delete(ctx context.Context, key string) error {
 	i.Lock()
 	defer i.Unlock()
-	delete(i.data, string(keymeta))
+	delete(i.data, key)
 	return nil
 }
 
-func (i *inmemory) Append(ctx context.Context, metakey []byte, data io.Reader, offset int64) (int64, error) {
+func (i *inmemory) Append(ctx context.Context, key string, data io.Reader) (int64, error) {
 	i.Lock()
 	defer i.Unlock()
 
-	body, ok := i.data[string(metakey)]
+	body, ok := i.data[key]
 	if !ok {
-		return 0, fmt.Errorf("EINVAL OFFSET. NO SUCH FILE %s", metakey)
+		return 0, fmt.Errorf("EINVAL OFFSET. NO SUCH FILE %s", key)
 	}
 
 	buff := new(bytes.Buffer)
@@ -97,25 +111,17 @@ func (i *inmemory) Append(ctx context.Context, metakey []byte, data io.Reader, o
 		return nn, err
 	}
 
-	if offset > int64(len(body)) {
-		var extended = make([]byte, offset+nn)
-		copy(extended, body)
-		extended = append(extended[:offset], buff.Bytes()...)
-		i.data[string(metakey)] = extended
-	} else {
-		i.data[string(metakey)] = append(body[:offset], buff.Bytes()...)
-	}
-	// fmt.Printf("%d %d %d\n", offset, nn, len(body))
+	i.data[key] = append(body, buff.Bytes()...)
 	return nn, nil
 }
 
-func (i *inmemory) URLFor(ctx context.Context, keymeta []byte) (string, error) {
+func (i *inmemory) URLFor(ctx context.Context, key string) (string, error) {
 	u, err := url.Parse(i.baseURL)
 	if err != nil {
 		return "", err
 	}
 	q := u.Query()
-	q.Set("key", string(keymeta))
+	q.Set("key", key)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
