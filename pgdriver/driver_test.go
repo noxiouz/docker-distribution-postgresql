@@ -56,9 +56,9 @@ func init() {
 
 	// create tables
 	if _, err := db.Exec(`CREATE TABLE mds (
-		ID	SERIAL 	PRIMARY KEY,
-		KEYMETA TEXT NOT NULL UNIQUE
-		);`); err != nil {
+			KEY 	TEXT PRIMARY KEY,
+			MDSFILEINFO TEXT NOT NULL
+	    );`); err != nil {
 		panic(err)
 	}
 

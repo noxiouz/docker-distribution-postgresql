@@ -19,7 +19,7 @@ type inmemory struct {
 	data    map[string][]byte
 }
 
-func newInMemory() (BinaryStorage, error) {
+func newInMemory() (KVStorage, error) {
 	// NOTE: distribution does not require any kind of Close method,
 	// so there is no possibility to prevent resourse leak
 	driver := &inmemory{

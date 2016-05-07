@@ -10,7 +10,7 @@ import (
 	"github.com/docker/distribution/context"
 )
 
-type BinaryStorage interface {
+type KVStorage interface {
 	Store(ctx context.Context, key string, data io.Reader) (int64, error)
 	Append(ctx context.Context, key string, data io.Reader) (int64, error)
 	Get(ctx context.Context, key string, offset int64) (io.ReadCloser, error)

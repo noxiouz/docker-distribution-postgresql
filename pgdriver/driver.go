@@ -26,7 +26,6 @@ const (
 	driverName    = "postgres"
 
 	tableMeta = "mfs"
-	tableMDS  = "mds"
 
 	// UserNameKey is used to get the user name from a user context
 	// NOTE: This const is defined since > 2.3.0:
@@ -94,7 +93,7 @@ func (f *factoryPostgreDriver) Create(parameters map[string]interface{}) (storag
 
 type driver struct {
 	cluster *pgcluster.Cluster
-	storage BinaryStorage
+	storage KVStorage
 }
 
 type baseEmbed struct {
@@ -108,7 +107,7 @@ type Driver struct {
 
 func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 	var (
-		st  BinaryStorage
+		st  KVStorage
 		err error
 	)
 	switch cfg.Type {
@@ -378,7 +377,7 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 
 	var (
 		// NOTE: intended to be used to mark files in MDS table
-		deleted []sql.NullString
+		deleted []string
 
 		key   sql.NullString
 		isDir = false
@@ -389,7 +388,7 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 		switch err {
 		case nil:
 			if key.Valid {
-				deleted = append(deleted, key)
+				deleted = append(deleted, key.String)
 			}
 		case sql.ErrNoRows:
 			return storagedriver.PathNotFoundError{Path: path}
@@ -420,8 +419,14 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 			}
 
 			if key.Valid {
-				deleted = append(deleted, key)
+				deleted = append(deleted, key.String)
 			}
+		}
+	}
+
+	for _, key := range deleted {
+		if err := d.storage.Delete(ctx, key); err != nil {
+			context.GetLoggerWithFields(ctx, map[interface{}]interface{}{"key": key, "error": err.Error()}).Error("KVStorage.Delete")
 		}
 	}
 

@@ -1,30 +1,50 @@
-// +build ignore
-
 package pgdriver
 
 import (
+	"database/sql"
+	sqldriver "database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"reflect"
 
 	"github.com/docker/distribution/context"
 
+	"github.com/noxiouz/go-postgresql-cluster/pgcluster"
 	"github.com/noxiouz/mds"
 )
 
+const (
+	tableMDS = "mds"
+)
+
 type metaInfo struct {
-	Key  string
-	Size int64
-	ID   string
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
+	ID   string `json:"id"`
+}
+
+func (m *metaInfo) Value() (sqldriver.Value, error) {
+	return json.Marshal(m)
+}
+
+func (m *metaInfo) Scan(src interface{}) error {
+	switch body := src.(type) {
+	case []byte:
+		return json.Unmarshal(body, m)
+	default:
+		return fmt.Errorf("can not Scan from non []byte type: %v", reflect.TypeOf(body))
+	}
 }
 
 type mdsBinStorage struct {
+	*pgcluster.Cluster
 	Storage   *mds.Client
 	Namespace string
 }
 
-func newMDSBinStorage(parameters map[string]interface{}) (BinaryStorage, error) {
+func newMDSBinStorage(cluster *pgcluster.Cluster, parameters map[string]interface{}) (KVStorage, error) {
 	var config struct {
 		mds.Config `mapstructure:",squash"`
 		Namespace  string
@@ -39,16 +59,16 @@ func newMDSBinStorage(parameters map[string]interface{}) (BinaryStorage, error) 
 	}
 
 	return &mdsBinStorage{
+		Cluster:   cluster,
 		Storage:   mdsClient,
 		Namespace: config.Namespace,
 	}, nil
 }
 
-func (m *mdsBinStorage) Store(ctx context.Context, data io.Reader) ([]byte, int64, error) {
-	key := genKey()
-	uinfo, err := m.Storage.Upload(m.Namespace, string(key), ioutil.NopCloser(data))
+func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (int64, error) {
+	uinfo, err := m.Storage.Upload(m.Namespace, key, ioutil.NopCloser(data))
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 
 	var meta = metaInfo{
@@ -57,35 +77,57 @@ func (m *mdsBinStorage) Store(ctx context.Context, data io.Reader) ([]byte, int6
 		ID:   uinfo.ID,
 	}
 
-	metakey, err := json.Marshal(meta)
+	_, err = m.DB(pgcluster.MASTER).Exec("INSERT INTO mds (key, mdsfileinfo) VALUES ($1, $2)", key, meta)
 	if err != nil {
-		return nil, 0, err
+		if mdserr := m.Storage.Delete(m.Namespace, uinfo.Key); mdserr != nil {
+			context.GetLoggerWithFields(ctx, map[interface{}]interface{}{"error": mdserr, "key": uinfo.Key}).Error("can not clean MDS after DB error")
+		}
+		return 0, err
 	}
-	return metakey, meta.Size, nil
+
+	return meta.Size, nil
 }
 
-func (m *mdsBinStorage) Get(ctx context.Context, metakey []byte, offset int64) (io.ReadCloser, error) {
-	var mdsmeta metaInfo
-	if err := json.Unmarshal(metakey, &mdsmeta); err != nil {
+func (m *mdsBinStorage) Get(ctx context.Context, key string, offset int64) (io.ReadCloser, error) {
+	mdskey, err := m.getMDSKey(ctx, key)
+	if err != nil {
 		return nil, err
 	}
 
-	return m.Storage.Get(m.Namespace, mdsmeta.Key, uint64(offset))
+	return m.Storage.Get(m.Namespace, mdskey, uint64(offset))
 }
 
-func (m *mdsBinStorage) Delete(ctx context.Context, meta []byte) error {
-	return fmt.Errorf("Delete is not implemneted in MDS")
+func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
+	mdskey, err := m.getMDSKey(ctx, key)
+	if err != nil {
+		return err
+	}
+
+	return m.Storage.Delete(m.Namespace, mdskey)
 }
 
-func (m *mdsBinStorage) Append(ctx context.Context, metakey []byte, data io.Reader) (int64, error) {
+func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) (int64, error) {
 	return 0, ErrAppendUnsupported
 }
 
-func (m *mdsBinStorage) URLFor(ctx context.Context, metakey []byte) (string, error) {
-	var mdsmeta metaInfo
-	if err := json.Unmarshal(metakey, &mdsmeta); err != nil {
+func (m *mdsBinStorage) URLFor(ctx context.Context, key string) (string, error) {
+	mdskey, err := m.getMDSKey(ctx, key)
+	if err != nil {
 		return "", err
 	}
 
-	return m.Storage.ReadURL(m.Namespace, mdsmeta.Key), nil
+	return m.Storage.ReadURL(m.Namespace, mdskey), nil
+}
+
+func (m *mdsBinStorage) getMDSKey(ctx context.Context, key string) (string, error) {
+	var mdsmeta metaInfo
+	err := m.DB(pgcluster.MASTER).QueryRow("SELECT mdsfileinfo FROM mds WHERE (key = $1)", key).Scan(&mdsmeta)
+	switch err {
+	case sql.ErrNoRows:
+		return "", fmt.Errorf("no such key %s", key)
+	case nil:
+		return mdsmeta.Key, nil
+	default:
+		return "", err
+	}
 }
