@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/docker/distribution/context"
+	"github.com/docker/distribution/registry/auth"
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
 	"github.com/docker/distribution/registry/storage/driver/base"
 	"github.com/docker/distribution/registry/storage/driver/factory"
@@ -26,12 +27,6 @@ const (
 	driverName    = "postgres"
 
 	tableMeta = "mfs"
-
-	// UserNameKey is used to get the user name from a user context
-	// NOTE: This const is defined since > 2.3.0:
-	// github.com/docker/distribution/registry/auth
-	// use it after upgrade
-	UserNameKey = "auth.user.name"
 )
 
 const (
@@ -110,24 +105,13 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		st  KVStorage
 		err error
 	)
-	switch cfg.Type {
-	case "inmemory":
-		st, err = newInMemory()
-	// case "mds":
-	// 	st, err = newMDSBinStorage(cfg.Options)
-	default:
-		return nil, fmt.Errorf("Unsupported binary storage backend %s", cfg.Type)
-	}
-	if err != nil {
-		return nil, err
-	}
 
 	cluster, err := pgcluster.NewPostgreSQLCluster(driverSQLName, cfg.URLs)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := cluster.DB(pgcluster.MASTER).Ping(); err != nil {
+	if err = cluster.DB(pgcluster.MASTER).Ping(); err != nil {
 		return nil, err
 	}
 
@@ -137,6 +121,21 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 
 	if cfg.MaxIdleConns != nil {
 		cluster.SetMaxIdleConns(*cfg.MaxIdleConns)
+	}
+
+	switch cfg.Type {
+	case "inmemory":
+		st, err = newInMemory()
+	case "mds":
+		st, err = newMDSBinStorage(cluster, cfg.Options)
+	default:
+		cluster.Close()
+		return nil, fmt.Errorf("Unsupported binary storage backend %s", cfg.Type)
+	}
+
+	if err != nil {
+		cluster.Close()
+		return nil, err
 	}
 
 	d := &Driver{
@@ -302,7 +301,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		return err
 	}
 
-	var owner = ctx.Value(UserNameKey)
+	var owner = ctx.Value(auth.UserNameKey)
 
 	// Check that the dest is not a directory.
 	switch err := tx.QueryRow(checksFileExistsAndGetType, destPath).Scan(&isDir); err {
@@ -573,7 +572,7 @@ func (fw *fileWriter) storeData() error {
 		return err
 	}
 
-	var owner = fw.Context.Value(UserNameKey)
+	var owner = fw.Context.Value(auth.UserNameKey)
 	tx, err := fw.driver.cluster.DB(pgcluster.MASTER).Begin()
 	if err != nil {
 		return err

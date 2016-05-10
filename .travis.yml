@@ -14,7 +14,7 @@ addons:
 
 before_install:
   - go get github.com/docker/distribution
-  - cd $GOPATH/src/github.com/docker/distribution && git checkout v2.4.1-rc.0; cd $TRAVIS_BUILD_DIR
+  - cd $GOPATH/src/github.com/docker/distribution && git checkout v2.4.1-rc.2; cd $TRAVIS_BUILD_DIR
 
 before_script:
   - psql -c 'create database distribution;' -U postgres
