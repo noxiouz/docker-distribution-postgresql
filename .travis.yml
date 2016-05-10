@@ -1,7 +1,7 @@
 language: go
 
 go:
-  - 1.5
+  - 1.6
   - tip
 
 sudo: false
@@ -14,13 +14,13 @@ addons:
 
 before_install:
   - go get github.com/docker/distribution
-  - cd $GOPATH/src/github.com/docker/distribution && git checkout v2.3.1; cd $TRAVIS_BUILD_DIR
+  - cd $GOPATH/src/github.com/docker/distribution && git checkout v2.4.1-rc.0; cd $TRAVIS_BUILD_DIR
 
 before_script:
   - psql -c 'create database distribution;' -U postgres
 
 script:
-  - go test -test.v -test.short -coverprofile=coverage.txt -covermode=atomic ./...
+  - go test -test.v -test.short -coverprofile=coverage.txt -covermode=atomic ./pgdriver
 
 after_success:
   - bash <(curl -s https://codecov.io/bash)

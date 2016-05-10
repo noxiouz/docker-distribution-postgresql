@@ -15,6 +15,7 @@ import (
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/noxiouz/go-postgresql-cluster/pgcluster"
+	"github.com/pborman/uuid"
 
 	// PostgreSQL backend for database/sql
 	_ "github.com/lib/pq"
@@ -25,7 +26,6 @@ const (
 	driverName    = "postgres"
 
 	tableMeta = "mfs"
-	tableMDS  = "mds"
 
 	// UserNameKey is used to get the user name from a user context
 	// NOTE: This const is defined since > 2.3.0:
@@ -38,11 +38,19 @@ const (
 	// checks if the file or dir exists and returns its type
 	checksFileExistsAndGetType = "SELECT dir FROM mfs WHERE path=$1"
 	// inserts metainformation about file or dir
-	insertMetaAboutFileOrDir = "INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)"
+	insertMetaAboutFileOrDir = "INSERT INTO mfs (path, parent, dir, size, modtime, key, owner) VALUES ($1, $2, $3, $4, now(), $5, $6)"
 )
 
 func init() {
 	factory.Register(driverName, &factoryPostgreDriver{})
+}
+
+func generateKey() string {
+	return uuid.NewRandom().String()
+}
+
+func isRoot(path string) bool {
+	return path == "/"
 }
 
 type postgreDriverConfig struct {
@@ -85,7 +93,7 @@ func (f *factoryPostgreDriver) Create(parameters map[string]interface{}) (storag
 
 type driver struct {
 	cluster *pgcluster.Cluster
-	storage BinaryStorage
+	storage KVStorage
 }
 
 type baseEmbed struct {
@@ -99,14 +107,14 @@ type Driver struct {
 
 func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 	var (
-		st  BinaryStorage
+		st  KVStorage
 		err error
 	)
 	switch cfg.Type {
 	case "inmemory":
 		st, err = newInMemory()
-	case "mds":
-		st, err = newMDSBinStorage(cfg.Options)
+	// case "mds":
+	// 	st, err = newMDSBinStorage(cfg.Options)
 	default:
 		return nil, fmt.Errorf("Unsupported binary storage backend %s", cfg.Type)
 	}
@@ -152,7 +160,7 @@ func (d *driver) Name() string {
 // GetContent retrieves the content stored at "path" as a []byte.
 // This should primarily be used for small objects.
 func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
-	key, err := d.getKey(ctx, path)
+	key, err := d.getKey(ctx, d.cluster.DB(pgcluster.MASTER), path)
 	if err != nil {
 		return nil, err
 	}
@@ -171,151 +179,50 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func (d *driver) getKey(ctx context.Context, path string) ([]byte, error) {
-	return getKeyViaDB(ctx, d.cluster.DB(pgcluster.MASTER), path)
-}
-
 type rowQuerier interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
-func getKeyViaDB(ctx context.Context, db rowQuerier, path string) ([]byte, error) {
-	var keymeta []byte
-	err := db.QueryRow("SELECT mds.keymeta FROM mfs JOIN mds ON (mfs.mdsid = mds.id) WHERE mfs.path = $1", path).Scan(&keymeta)
+func (d *driver) getKey(ctx context.Context, db rowQuerier, path string) (string, error) {
+	var key string
+	err := db.QueryRow("SELECT key FROM mfs WHERE path=$1", path).Scan(&key)
 	switch err {
 	case sql.ErrNoRows:
-		// NOTE: actually it also means that the path is a directory
-		return nil, storagedriver.PathNotFoundError{Path: path}
+		return "", storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
 	case nil:
-		return keymeta, nil
+		return key, nil
 	default:
-		return nil, err
+		return "", err
 	}
 }
 
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *driver) PutContent(ctx context.Context, path string, content []byte) error {
-	if _, err := d.WriteStream(ctx, path, 0, bytes.NewReader(content)); err != nil {
+	writer, err := d.Writer(ctx, path, false)
+	if err != nil {
 		return err
 	}
-	return nil
+	defer writer.Close()
+	_, err = io.Copy(writer, bytes.NewReader(content))
+	if err != nil {
+		writer.Cancel()
+		return err
+	}
+	return writer.Commit()
 }
 
-// WriteStream stores the contents of the provided io.ReadCloser at a
-// location designated by the given path.
-// May be used to resume writing a stream by providing a nonzero offset.
-// The offset must be no larger than the CurrentSize for this path.
-func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
-	// NOTE: right now writting with offset is not supported by MDS, so there's no point to implemnet it now.
-	// It could be added to testing backend, but it should UPDATE if key already exist and insert if it does not.
-	if offset != 0 {
-		tx, err := d.cluster.DB(pgcluster.MASTER).Begin()
-		if err != nil {
-			return 0, err
-		}
-		defer tx.Rollback()
-
-		keymeta, err := getKeyViaDB(ctx, tx, path)
-		if err != nil {
-			return 0, err
-		}
-
-		nn, err = d.storage.Append(ctx, keymeta, reader, offset)
-		switch err {
-		case nil:
-			// NOTE: update size
-			_, err := tx.Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", nn+offset, path)
-			if err != nil {
-				return nn, err
-			}
-
-			return nn, tx.Commit()
-		case ErrAppendUnsupported:
-			return nn, &storagedriver.Error{
-				DriverName: driverName,
-				Enclosed:   fmt.Errorf("BinaryStorage does not support writing with non-zero offset"),
-			}
-		default:
-			return nn, err
-		}
-	}
-
-	var owner = ctx.Value(UserNameKey)
-	key, nn, err := d.storage.Store(ctx, reader)
-	if err != nil {
-		return nn, err
-	}
-	// TODO: delete the key if tx is rollbacked
-
-	tx, err := d.cluster.DB(pgcluster.MASTER).Begin()
-	if err != nil {
-		return nn, err
-	}
-	defer tx.Rollback()
-
-	var mdsid int64
-	if err := d.cluster.DB(pgcluster.MASTER).QueryRow("INSERT INTO mds (keymeta) VALUES ($1) RETURNING ID", key).Scan(&mdsid); err != nil {
-		return 0, err
-	}
-
-	// Check and insert file
-	var isDir = false
-	switch err := tx.QueryRow(checksFileExistsAndGetType, path).Scan(&isDir); err {
-	case nil:
-		if isDir {
-			return 0, fmt.Errorf("unable to rewrite directory by file: %s", path)
-		}
-		if _, err := tx.Exec("DELETE FROM mfs WHERE path=$1", path); err != nil {
-			return 0, err
-		}
-	case sql.ErrNoRows:
-		// pass
-	default:
-		return 0, err
-	}
-
-	// NOTE: may be update would be useful
-	// NOTE: calculate size properly
-	if _, err := tx.Exec(insertMetaAboutFileOrDir, path, filepath.Dir(path), false, offset+nn, mdsid, owner); err != nil {
-		return 0, err
-	}
-
-	// TODO: wrap into a function
-	parent := filepath.Dir(path)
-DIRECTORY_CREATION_LOOP:
-	for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
-		var (
-			fullpath = filepath.Join(dir, filename)
-			isDir    = false
-		)
-
-		switch err := tx.QueryRow(checksFileExistsAndGetType, fullpath).Scan(&isDir); err {
-		case nil:
-			if !isDir {
-				return nn, fmt.Errorf("unable to rewrite file by directory: %s", path)
-			}
-			break DIRECTORY_CREATION_LOOP
-		case sql.ErrNoRows:
-			// pass
-		default:
-			return nn, err
-		}
-
-		_, err = tx.Exec(insertMetaAboutFileOrDir, fullpath, dir, true, 0, nil, owner)
-		if err != nil {
-			return nn, err
-		}
-	}
-
-	return nn, tx.Commit()
+// Writer returns a FileWriter which will store the content written to it
+// at the location designated by "path" after the call to Commit.
+func (d *driver) Writer(ctx context.Context, path string, append bool) (storagedriver.FileWriter, error) {
+	return newFileWriter(ctx, d, path, append)
 }
 
-// ReadStream retrieves an io.ReadCloser for the content stored at "path"
+// Reader retrieves an io.ReadCloser for the content stored at "path"
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
-func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
-	key, err := d.getKey(ctx, path)
+func (d *driver) Reader(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
+	key, err := d.getKey(ctx, d.cluster.DB(pgcluster.MASTER), path)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +242,7 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	case sql.ErrNoRows:
 		return nil, storagedriver.PathNotFoundError{Path: path, DriverName: driverName}
 	case nil:
-		return &storagedriver.FileInfoInternal{info}, nil
+		return &storagedriver.FileInfoInternal{FileInfoFields: info}, nil
 	default:
 		return nil, err
 	}
@@ -344,7 +251,7 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 // List returns a list of the objects that are direct descendants of the given path.
 func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 	//NOTE: should I use Tx?
-	if path != "/" {
+	if !isRoot(path) {
 		var ph interface{}
 		switch err := d.cluster.DB(pgcluster.MASTER).QueryRow("SELECT 1 FROM mfs WHERE path=$1", path).Scan(&ph); err {
 		case sql.ErrNoRows:
@@ -402,27 +309,27 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 	case sql.ErrNoRows:
 		parent := filepath.Dir(destPath)
 		var (
-			size  int64
-			mdsid sql.NullInt64
+			size int64
+			key  sql.NullString
 		)
 
-		if err := tx.QueryRow(`DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid`, sourcePath).Scan(&size, &mdsid); err != nil {
+		if err = tx.QueryRow(`DELETE FROM mfs WHERE path = $1 RETURNING size, key`, sourcePath).Scan(&size, &key); err != nil {
 			return err
 		}
 
-		_, err = tx.Exec(`INSERT INTO mfs (path, parent, dir, size, modtime, mdsid, owner) VALUES ($1, $2, false, $3, now(), $4, $5)`, destPath, parent, size, mdsid, owner)
+		_, err = tx.Exec(`INSERT INTO mfs (path, parent, dir, size, modtime, key, owner) VALUES ($1, $2, false, $3, now(), $4, $5)`, destPath, parent, size, key, owner)
 		if err != nil {
 			return err
 		}
 
 	DIRECTORY_CREATION_LOOP:
-		for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
+		for dir, filename := filepath.Dir(parent), filepath.Base(parent); !isRoot(filename) && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
 			var (
 				fullpath = filepath.Join(dir, filename)
 				isDir    = false
 			)
 
-			switch err := tx.QueryRow(checksFileExistsAndGetType, fullpath).Scan(&isDir); err {
+			switch err = tx.QueryRow(checksFileExistsAndGetType, fullpath).Scan(&isDir); err {
 			case nil:
 				if !isDir {
 					return fmt.Errorf("unable to rewrite file by directory: %s", destPath)
@@ -446,9 +353,9 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) e
 		}
 		// TODO: looks ugly. Actually I can merge previous queries here by adding dir = true
 		// Delete source record and update dest record with some fields
-		_, err := tx.Exec(`
-			WITH t AS (DELETE FROM mfs WHERE path = $1 RETURNING size, mdsid)
-			UPDATE mfs SET (size, modtime, mdsid) = (t.size, now(), t.mdsid)
+		_, err = tx.Exec(`
+			WITH t AS (DELETE FROM mfs WHERE path = $1 RETURNING size, key)
+			UPDATE mfs SET (size, modtime, key) = (t.size, now(), t.key)
 			FROM t WHERE mfs.path = $2;`, sourcePath, destPath)
 		if err != nil {
 			return err
@@ -470,25 +377,24 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 
 	var (
 		// NOTE: intended to be used to mark files in MDS table
-		deleted []sql.NullInt64
+		deleted []string
 
-		mdsid sql.NullInt64
+		key   sql.NullString
 		isDir = false
 	)
 
-	if path != "/" {
-		err = tx.QueryRow("DELETE FROM mfs WHERE mfs.path = $1 RETURNING mfs.mdsid, mfs.dir", path).Scan(&mdsid, &isDir)
+	if !isRoot(path) {
+		err = tx.QueryRow("DELETE FROM mfs WHERE mfs.path = $1 RETURNING mfs.key, mfs.dir", path).Scan(&key, &isDir)
 		switch err {
 		case nil:
-			if mdsid.Valid {
-				deleted = append(deleted, mdsid)
+			if key.Valid {
+				deleted = append(deleted, key.String)
 			}
 		case sql.ErrNoRows:
 			return storagedriver.PathNotFoundError{Path: path}
 		default:
 			return err
 		}
-
 	}
 
 	// NOTE: scan for childs only if a directory is being deleted
@@ -500,7 +406,7 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 			    UNION ALL
 			        SELECT mfs.path FROM t, mfs WHERE mfs.parent = t.path
 			)
-			DELETE FROM mfs USING t WHERE mfs.path = t.path RETURNING mfs.mdsid;
+			DELETE FROM mfs USING t WHERE mfs.path = t.path RETURNING mfs.key;
 		`, path)
 		if err != nil {
 			return err
@@ -508,13 +414,19 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 		defer rows.Close()
 
 		for rows.Next() {
-			if err := rows.Scan(&mdsid); err != nil {
+			if err := rows.Scan(&key); err != nil {
 				return err
 			}
 
-			if mdsid.Valid {
-				deleted = append(deleted, mdsid)
+			if key.Valid {
+				deleted = append(deleted, key.String)
 			}
+		}
+	}
+
+	for _, key := range deleted {
+		if err := d.storage.Delete(ctx, key); err != nil {
+			context.GetLoggerWithFields(ctx, map[interface{}]interface{}{"key": key, "error": err.Error()}).Error("KVStorage.Delete")
 		}
 	}
 
@@ -525,10 +437,227 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 // URLFor returns a URL which may be used to retrieve the content stored at
 // the given path, possibly using the given options.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
-	key, err := d.getKey(ctx, path)
+	key, err := d.getKey(ctx, d.cluster.DB(pgcluster.MASTER), path)
 	if err != nil {
 		return "", err
 	}
 
 	return d.storage.URLFor(ctx, key)
+}
+
+// fileWriter provides an abstraction for an opened writable file-like object in
+// the storage backend. The FileWriter must flush all content written to it on
+// the call to Close, but is only required to make its content readable on a
+// call to Commit.
+type fileWriter struct {
+	context.Context
+	*driver
+
+	buff   *bytes.Buffer
+	path   string
+	key    string
+	append bool
+
+	size int64
+
+	closed    bool
+	committed bool
+	cancelled bool
+}
+
+func newFileWriter(ctx context.Context, driver *driver, path string, append bool) (storagedriver.FileWriter, error) {
+	fw := &fileWriter{
+		Context: ctx,
+		driver:  driver,
+
+		buff:   new(bytes.Buffer),
+		path:   path,
+		append: append,
+	}
+
+	if append {
+		var key sql.NullString
+
+		err := fw.driver.cluster.DB(pgcluster.MASTER).QueryRow("SELECT size, key FROM mfs WHERE path=$1", path).Scan(&fw.size, &key)
+		switch err {
+		case sql.ErrNoRows:
+			fw.size = 0
+			fw.key = generateKey()
+		case nil:
+			if !key.Valid {
+				return nil, fmt.Errorf("Trying to append to a directory file: %s", path)
+			}
+			fw.key = key.String
+		default:
+			return nil, err
+		}
+	} else {
+		fw.key = generateKey()
+	}
+
+	return fw, nil
+}
+
+func (fw *fileWriter) Write(p []byte) (int, error) {
+	if fw.closed {
+		return 0, fmt.Errorf("already closed")
+	} else if fw.committed {
+		return 0, fmt.Errorf("already committed")
+	} else if fw.cancelled {
+		return 0, fmt.Errorf("already cancelled")
+	}
+
+	nn, err := fw.buff.Write(p)
+	fw.size += int64(nn)
+	if err != nil {
+		return nn, err
+	}
+
+	return nn, nil
+}
+
+func (fw *fileWriter) Close() error {
+	if fw.closed {
+		return fmt.Errorf("already closed")
+	}
+
+	fw.closed = true
+
+	if !fw.committed {
+		if fw.append {
+			return fw.appendData()
+		}
+
+		return fw.storeData()
+	}
+
+	return nil
+}
+
+// Size returns the number of bytes written to this FileWriter.
+func (fw *fileWriter) Size() int64 {
+	return fw.size
+}
+
+// Cancel removes any written content from this FileWriter.
+func (fw *fileWriter) Cancel() error {
+	if fw.closed {
+		return fmt.Errorf("already closed")
+	}
+	fw.cancelled = true
+
+	return nil
+}
+
+func (fw *fileWriter) appendData() error {
+	_, err := fw.driver.storage.Append(fw.Context, fw.key, fw.buff)
+	switch err {
+	case nil:
+		_, err = fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.size, fw.path)
+		if err != nil {
+			return err
+		}
+		return nil
+	case ErrAppendUnsupported:
+		return &storagedriver.Error{
+			DriverName: driverName,
+			Enclosed:   fmt.Errorf("BinaryStorage does not support append"),
+		}
+	default:
+		return err
+	}
+}
+
+func (fw *fileWriter) storeData() error {
+	if _, err := fw.driver.storage.Store(fw.Context, fw.key, fw.buff); err != nil {
+		return err
+	}
+
+	var owner = fw.Context.Value(UserNameKey)
+	tx, err := fw.driver.cluster.DB(pgcluster.MASTER).Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Check and insert file
+	var isDir = false
+	switch err = tx.QueryRow(checksFileExistsAndGetType, fw.path).Scan(&isDir); err {
+	case nil:
+		if isDir {
+			return fmt.Errorf("unable to rewrite directory by file: %s", fw.path)
+		}
+		if _, err = tx.Exec("DELETE FROM mfs WHERE path=$1", fw.path); err != nil {
+			return err
+		}
+	case sql.ErrNoRows:
+		// pass
+	default:
+		return err
+	}
+
+	// NOTE: may be update would be useful
+	// NOTE: calculate size properly
+	if _, err = tx.Exec(insertMetaAboutFileOrDir, fw.path, filepath.Dir(fw.path), false, fw.size, fw.key, owner); err != nil {
+		return err
+	}
+
+	// TODO: wrap into a function
+	parent := filepath.Dir(fw.path)
+DIRECTORY_CREATION_LOOP:
+	for dir, filename := filepath.Dir(parent), filepath.Base(parent); filename != "/" && filename != "."; dir, filename = filepath.Dir(dir), filepath.Base(dir) {
+		var (
+			fullpath = filepath.Join(dir, filename)
+			isDir    = false
+		)
+
+		switch err = tx.QueryRow(checksFileExistsAndGetType, fullpath).Scan(&isDir); err {
+		case nil:
+			if !isDir {
+				return fmt.Errorf("unable to rewrite file by directory: %s", fw.path)
+			}
+			break DIRECTORY_CREATION_LOOP
+		case sql.ErrNoRows:
+			// pass
+		default:
+			return err
+		}
+
+		_, err = tx.Exec(insertMetaAboutFileOrDir, fullpath, dir, true, 0, nil, owner)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Commit flushes all content written to this FileWriter and makes it
+// available for future calls to StorageDriver.GetContent and
+// StorageDriver.Reader.
+func (fw *fileWriter) Commit() error {
+	if fw.closed {
+		return fmt.Errorf("already closed")
+	} else if fw.committed {
+		return fmt.Errorf("already committed")
+	} else if fw.cancelled {
+		return fmt.Errorf("already cancelled")
+	}
+
+	// NOTE: right now writting with offset is not supported by MDS, so there's no point to implemnet it now.
+	// It could be added to testing backend, but it should UPDATE if key already exist and insert if it does not.
+	if fw.append {
+		return fw.appendData()
+	}
+
+	if err := fw.storeData(); err != nil {
+		return err
+	}
+
+	fw.committed = true
+	return nil
 }
