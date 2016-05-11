@@ -55,6 +55,8 @@ type postgreDriverConfig struct {
 	// pointer is here to distinguish 0 vlaue from zerovalue by comparing with `nil`
 	MaxIdleConns *int
 
+	DisableURLFor bool
+
 	Type    string
 	Options map[string]interface{}
 }
@@ -89,6 +91,8 @@ func (f *factoryPostgreDriver) Create(parameters map[string]interface{}) (storag
 type driver struct {
 	cluster *pgcluster.Cluster
 	storage KVStorage
+
+	disableURLFor bool
 }
 
 type baseEmbed struct {
@@ -142,8 +146,9 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		baseEmbed: baseEmbed{
 			Base: base.Base{
 				StorageDriver: &driver{
-					cluster: cluster,
-					storage: st,
+					cluster:       cluster,
+					storage:       st,
+					disableURLFor: cfg.DisableURLFor,
 				},
 			},
 		},
@@ -436,6 +441,10 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 // URLFor returns a URL which may be used to retrieve the content stored at
 // the given path, possibly using the given options.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
+	if d.disableURLFor {
+		return "", storagedriver.ErrUnsupportedMethod{DriverName: driverName}
+	}
+
 	key, err := d.getKey(ctx, d.cluster.DB(pgcluster.MASTER), path)
 	if err != nil {
 		return "", err
