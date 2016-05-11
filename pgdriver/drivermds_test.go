@@ -1,18 +1,15 @@
+// +build yandex
+
 package pgdriver
 
 import (
 	"database/sql"
 	"os"
 	"strings"
-	"testing"
 
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
 	"github.com/docker/distribution/registry/storage/driver/testsuites"
-	. "gopkg.in/check.v1"
 )
-
-// Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
 
 func init() {
 	testsuites.RegisterSuite(func() (storagedriver.StorageDriver, error) {
@@ -26,12 +23,29 @@ func init() {
 
 		URLs := fromEnvOrDefault("PG_URLS", "postgres://noxiouz@localhost:5432/distribution?sslmode=disable")
 
+		authHeader := os.Getenv("MDSAUTH")
+		if authHeader == "" {
+			panic("specify mds auth info")
+		}
+
+		mdsHost := os.Getenv("MDSHOST")
+		if mdsHost == "" {
+			panic("specify mds host")
+		}
+
 		var idleConns = 5
 		cfg := postgreDriverConfig{
 			MaxOpenConns: 10,
 			MaxIdleConns: &idleConns,
 			URLs:         strings.Split(URLs, " "),
-			Type:         "inmemory",
+			Type:         "mds",
+			Options: map[string]interface{}{
+				"host":       mdsHost,
+				"uploadport": 1111,
+				"readport":   80,
+				"authheader": authHeader,
+				"namespace":  "docker-registry",
+			},
 		}
 
 		db, err := sql.Open(driverSQLName, cfg.URLs[0])
