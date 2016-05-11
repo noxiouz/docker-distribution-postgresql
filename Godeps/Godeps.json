@@ -1,7 +1,7 @@
 {
 	"ImportPath": "github.com/noxiouz/docker-distribution-postgresql",
 	"GoVersion": "go1.6",
-	"GodepVersion": "v60",
+	"GodepVersion": "v65",
 	"Packages": [
 		"./..."
 	],
@@ -13,33 +13,33 @@
 		},
 		{
 			"ImportPath": "github.com/docker/distribution/context",
-			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
-			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution/registry/storage/driver",
-			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
-			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution/registry/storage/driver/base",
-			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
-			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution/registry/storage/driver/factory",
-			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
-			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution/registry/storage/driver/testsuites",
-			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
-			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution/uuid",
-			"Comment": "v2.4.0-rc.1-86-g4ecea4b",
-			"Rev": "4ecea4b311d968fb789e30a78c8c6510996a9183"
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
 			"ImportPath": "github.com/gorilla/context",
@@ -78,11 +78,36 @@
 		},
 		{
 			"ImportPath": "golang.org/x/net/context",
-			"Rev": "2cba614e8ff920c60240d2677bc019af32ee04e5"
+			"Rev": "4876518f9e71663000c348837735820161a42df7"
 		},
 		{
 			"ImportPath": "gopkg.in/check.v1",
 			"Rev": "64131543e7896d5bcc6bd5a76287eb75ea96c673"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/vendor/github.com/Sirupsen/logrus",
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/vendor/github.com/gorilla/mux",
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/vendor/golang.org/x/net/context",
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/vendor/github.com/gorilla/context",
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
+		},
+		{
+			"ImportPath": "github.com/docker/distribution/vendor/gopkg.in/check.v1",
+			"Comment": "v2.4.1-rc.2",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		}
 	]
 }

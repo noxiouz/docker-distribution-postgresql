@@ -13,6 +13,8 @@ import (
 
 	"github.com/noxiouz/go-postgresql-cluster/pgcluster"
 	"github.com/noxiouz/mds"
+
+	storagedriver "github.com/docker/distribution/registry/storage/driver"
 )
 
 const (
@@ -71,7 +73,7 @@ func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (
 		return 0, err
 	}
 
-	var meta = metaInfo{
+	var meta = &metaInfo{
 		Key:  uinfo.Key,
 		Size: int64(uinfo.Size),
 		ID:   uinfo.ID,
@@ -103,11 +105,29 @@ func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
-	return m.Storage.Delete(m.Namespace, mdskey)
+	if err = m.Storage.Delete(m.Namespace, mdskey); err != nil {
+		return err
+	}
+
+	// Mark deleted
+	_, err = m.DB(pgcluster.MASTER).Exec("UPDATE mds SET deleted = true WHERE (key = $1)", key)
+	if err != nil {
+		context.GetLogger(ctx).Errorf("update metainfo about deleted key %s error: %v", key, err)
+	}
+
+	return nil
 }
 
 func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) (int64, error) {
-	return 0, ErrAppendUnsupported
+	_, err := m.getMDSKey(ctx, key)
+	switch err.(type) {
+	case storagedriver.PathNotFoundError:
+		return m.Store(ctx, key, data)
+	case nil:
+		return 0, ErrAppendUnsupported
+	default:
+		return 0, err
+	}
 }
 
 func (m *mdsBinStorage) URLFor(ctx context.Context, key string) (string, error) {
@@ -121,10 +141,10 @@ func (m *mdsBinStorage) URLFor(ctx context.Context, key string) (string, error) 
 
 func (m *mdsBinStorage) getMDSKey(ctx context.Context, key string) (string, error) {
 	var mdsmeta metaInfo
-	err := m.DB(pgcluster.MASTER).QueryRow("SELECT mdsfileinfo FROM mds WHERE (key = $1)", key).Scan(&mdsmeta)
+	err := m.DB(pgcluster.MASTER).QueryRow("SELECT mdsfileinfo FROM mds WHERE (key = $1 and NOT deleted)", key).Scan(&mdsmeta)
 	switch err {
 	case sql.ErrNoRows:
-		return "", fmt.Errorf("no such key %s", key)
+		return "", storagedriver.PathNotFoundError{Path: key, DriverName: driverName}
 	case nil:
 		return mdsmeta.Key, nil
 	default:

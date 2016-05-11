@@ -57,7 +57,8 @@ func init() {
 	// create tables
 	if _, err := db.Exec(`CREATE TABLE mds (
 			KEY 	TEXT PRIMARY KEY,
-			MDSFILEINFO TEXT NOT NULL
+			MDSFILEINFO TEXT NOT NULL,
+			DELETED BOOLEAN NOT NULL DEFAULT FALSE
 	    );`); err != nil {
 		panic(err)
 	}
