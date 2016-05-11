@@ -1,6 +1,7 @@
 package pgdriver
 
 import (
+	"bytes"
 	"database/sql"
 	sqldriver "database/sql/driver"
 	"encoding/json"
@@ -91,21 +92,25 @@ func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (
 }
 
 func (m *mdsBinStorage) Get(ctx context.Context, key string, offset int64) (io.ReadCloser, error) {
-	mdskey, err := m.getMDSKey(ctx, key)
+	metainfo, err := m.getMDSMetaInfo(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 
-	return m.Storage.Get(m.Namespace, mdskey, uint64(offset))
+	if offset >= metainfo.Size {
+		return ioutil.NopCloser(bytes.NewReader(make([]byte, 0))), nil
+	}
+
+	return m.Storage.Get(m.Namespace, metainfo.Key, uint64(offset))
 }
 
 func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
-	mdskey, err := m.getMDSKey(ctx, key)
+	metainfo, err := m.getMDSMetaInfo(ctx, key)
 	if err != nil {
 		return err
 	}
 
-	if err = m.Storage.Delete(m.Namespace, mdskey); err != nil {
+	if err = m.Storage.Delete(m.Namespace, metainfo.Key); err != nil {
 		return err
 	}
 
@@ -119,35 +124,55 @@ func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
 }
 
 func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) (int64, error) {
-	_, err := m.getMDSKey(ctx, key)
+	metainfo, err := m.getMDSMetaInfo(ctx, key)
 	switch err.(type) {
 	case storagedriver.PathNotFoundError:
 		return m.Store(ctx, key, data)
 	case nil:
-		return 0, ErrAppendUnsupported
+		// NOTE: Append to a file is NOT expected to be used in MDS,
+		// but noresumable tag does not work in distribution
+		context.GetLogger(ctx).Errorf("Append via Read/Delete is used in MDS for %s", key)
+		body, err := m.Storage.GetFile(m.Namespace, metainfo.Key)
+		if err != nil {
+			context.GetLogger(ctx).Errorf("Unable to read MDS File %s: %v", metainfo.Key, err)
+			return 0, err
+		}
+
+		mr := io.MultiReader(bytes.NewReader(body), data)
+		if err = m.Storage.Delete(m.Namespace, metainfo.Key); err != nil {
+			context.GetLogger(ctx).Errorf("Unable to delete from MDS %s: %v", metainfo.Key, err)
+			return 0, err
+		}
+
+		_, err = m.DB(pgcluster.MASTER).Exec("DELETE FROM mds WHERE (key = $1)", key)
+		if err != nil {
+			context.GetLogger(ctx).Errorf("delete metainfo about key %s error: %v", key, err)
+		}
+
+		return m.Store(ctx, key, mr)
 	default:
 		return 0, err
 	}
 }
 
 func (m *mdsBinStorage) URLFor(ctx context.Context, key string) (string, error) {
-	mdskey, err := m.getMDSKey(ctx, key)
+	metainfo, err := m.getMDSMetaInfo(ctx, key)
 	if err != nil {
 		return "", err
 	}
 
-	return m.Storage.ReadURL(m.Namespace, mdskey), nil
+	return m.Storage.ReadURL(m.Namespace, metainfo.Key), nil
 }
 
-func (m *mdsBinStorage) getMDSKey(ctx context.Context, key string) (string, error) {
+func (m *mdsBinStorage) getMDSMetaInfo(ctx context.Context, key string) (*metaInfo, error) {
 	var mdsmeta metaInfo
 	err := m.DB(pgcluster.MASTER).QueryRow("SELECT mdsfileinfo FROM mds WHERE (key = $1 and NOT deleted)", key).Scan(&mdsmeta)
 	switch err {
 	case sql.ErrNoRows:
-		return "", storagedriver.PathNotFoundError{Path: key, DriverName: driverName}
+		return nil, storagedriver.PathNotFoundError{Path: key, DriverName: driverName}
 	case nil:
-		return mdsmeta.Key, nil
+		return &mdsmeta, nil
 	default:
-		return "", err
+		return nil, err
 	}
 }
