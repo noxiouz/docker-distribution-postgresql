@@ -131,7 +131,7 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 	case nil:
 		// NOTE: Append to a file is NOT expected to be used in MDS,
 		// but noresumable tag does not work in distribution
-		context.GetLogger(ctx).Errorf("Append via Read/Delete is used in MDS for %s", key)
+		context.GetLogger(ctx).Errorf("Append via Read/Delete is used in MDS for %s %v", key, metainfo)
 		body, err := m.Storage.GetFile(m.Namespace, metainfo.Key)
 		if err != nil {
 			context.GetLogger(ctx).Errorf("Unable to read MDS File %s: %v", metainfo.Key, err)

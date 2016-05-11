@@ -482,6 +482,8 @@ func newFileWriter(ctx context.Context, driver *driver, path string, append bool
 		case sql.ErrNoRows:
 			fw.size = 0
 			fw.key = generateKey()
+			// NOTE: distribution calls blob.Resume on non-created file
+			fw.append = false
 		case nil:
 			if !key.Valid {
 				return nil, fmt.Errorf("Trying to append to a directory file: %s", path)
@@ -494,6 +496,10 @@ func newFileWriter(ctx context.Context, driver *driver, path string, append bool
 		fw.key = generateKey()
 	}
 
+	context.GetLoggerWithFields(ctx, map[interface{}]interface{}{
+		"path": fw.path, "append": fw.append,
+		"key": fw.key, "size": fw.size}).Debugf("newFileWriter")
+
 	return fw, nil
 }
 
@@ -505,6 +511,10 @@ func (fw *fileWriter) Write(p []byte) (int, error) {
 	} else if fw.cancelled {
 		return 0, fmt.Errorf("already cancelled")
 	}
+
+	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+		"path": fw.path, "append": fw.append,
+		"key": fw.key, "len": len(p)}).Debugf("Write")
 
 	nn, err := fw.buff.Write(p)
 	fw.size += int64(nn)
@@ -549,25 +559,43 @@ func (fw *fileWriter) Cancel() error {
 }
 
 func (fw *fileWriter) appendData() error {
+	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+		"path": fw.path, "append": fw.append,
+		"key": fw.key, "len": fw.buff.Len()}).Debugf("appendData")
+
 	_, err := fw.driver.storage.Append(fw.Context, fw.key, fw.buff)
 	switch err {
 	case nil:
-		_, err = fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.size, fw.path)
+		result, err := fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.size, fw.path)
 		if err != nil {
 			return err
 		}
-		return nil
-	case ErrAppendUnsupported:
-		return &storagedriver.Error{
-			DriverName: driverName,
-			Enclosed:   fmt.Errorf("BinaryStorage does not support append"),
+
+		affected, err := result.RowsAffected()
+		if err != nil {
+			context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+				"path": fw.path, "append": fw.append,
+				"key": fw.key, "len": fw.buff.Len()}).Errorf("result.RowsAffected(): %v", err)
 		}
+
+		if affected != 1 {
+			context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+				"path": fw.path, "append": fw.append,
+				"key": fw.key, "len": fw.buff.Len()}).Errorf("UPDATE mfs must affect 1 row: affected %d", affected)
+			return fmt.Errorf("UPDATE metaInfo error: invalid affected rows count")
+		}
+
+		return nil
 	default:
 		return err
 	}
 }
 
 func (fw *fileWriter) storeData() error {
+	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+		"path": fw.path, "append": fw.append,
+		"key": fw.key, "len": fw.buff.Len()}).Debugf("storeData")
+
 	if _, err := fw.driver.storage.Store(fw.Context, fw.key, fw.buff); err != nil {
 		return err
 	}
@@ -647,6 +675,7 @@ func (fw *fileWriter) Commit() error {
 		return fmt.Errorf("already cancelled")
 	}
 
+	fw.committed = true
 	// NOTE: right now writting with offset is not supported by MDS, so there's no point to implemnet it now.
 	// It could be added to testing backend, but it should UPDATE if key already exist and insert if it does not.
 	if fw.append {
@@ -657,6 +686,5 @@ func (fw *fileWriter) Commit() error {
 		return err
 	}
 
-	fw.committed = true
 	return nil
 }
