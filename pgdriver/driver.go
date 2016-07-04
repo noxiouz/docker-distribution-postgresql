@@ -602,36 +602,37 @@ func (fw *fileWriter) appendData() error {
 		"path": fw.path, "append": fw.append, "key": fw.key}).Debugf("appendData")
 
 	_, err := fw.driver.storage.Append(fw.Context, fw.key, fw.rd)
-	switch err {
-	case nil:
-		result, err := fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.Size(), fw.path)
-		if err != nil {
-			return err
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
-				"path": fw.path, "append": fw.append,
-				"key": fw.key}).Errorf("result.RowsAffected(): %v", err)
-		}
-
-		if affected != 1 {
-			context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
-				"path": fw.path, "append": fw.append,
-				"key": fw.key}).Errorf("UPDATE mfs must affect 1 row: affected %d", affected)
-			return fmt.Errorf("UPDATE metaInfo error: invalid affected rows count")
-		}
-
-		return nil
-	default:
+	if err != nil {
+		fw.rd.CloseWithError(err)
 		return err
 	}
+
+	result, err := fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.Size(), fw.path)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+			"path": fw.path, "append": fw.append,
+			"key": fw.key}).Errorf("result.RowsAffected(): %v", err)
+	}
+
+	if affected != 1 {
+		context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
+			"path": fw.path, "append": fw.append,
+			"key": fw.key}).Errorf("UPDATE mfs must affect 1 row: affected %d", affected)
+		return fmt.Errorf("UPDATE metaInfo error: invalid affected rows count")
+	}
+
+	return nil
 }
 
 func (fw *fileWriter) storeData() error {
 	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{"path": fw.path, "append": fw.append, "key": fw.key}).Debugf("storeData")
 	if _, err := fw.driver.storage.Store(fw.Context, fw.key, fw.rd); err != nil {
+		fw.rd.CloseWithError(err)
 		return err
 	}
 
