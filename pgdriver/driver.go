@@ -522,9 +522,12 @@ func newFileWriter(ctx context.Context, driver *driver, path string, append bool
 		default:
 			return nil, err
 		}
-		go fw.handleAsyncWrite(fw.appendData)
 	} else {
 		fw.key = generateKey()
+	}
+	if fw.append {
+		go fw.handleAsyncWrite(fw.appendData)
+	} else {
 		go fw.handleAsyncWrite(fw.storeData)
 	}
 
