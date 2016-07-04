@@ -3,6 +3,7 @@ package pgdriver
 import (
 	"bytes"
 	"database/sql"
+	"expvar"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/docker/distribution/registry/storage/driver/factory"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/noxiouz/expvarmetrics"
 	"github.com/noxiouz/go-postgresql-cluster/pgcluster"
 	"github.com/pborman/uuid"
 
@@ -39,7 +41,17 @@ const (
 
 func init() {
 	factory.Register(driverName, &factoryPostgreDriver{})
+
+	// it would be visible in /debug/vars
+	// even if postgres driver is not used.
+	// I don't want to do any `test and set` magic
+	metrics := expvar.NewMap("postgres_driver")
+	metrics.Set("bytes_written", bytesWrittenToStorage)
 }
+
+var (
+	bytesWrittenToStorage = expvarmetrics.NewMeterVar()
+)
 
 func generateKey() string {
 	return uuid.NewRandom().String()
@@ -510,17 +522,15 @@ func newFileWriter(ctx context.Context, driver *driver, path string, append bool
 		default:
 			return nil, err
 		}
-		// go func() { fw.asyncWriterResult <- fw.appendData(); close(fw.asyncWriterResult) }()
 		go fw.handleAsyncWrite(fw.appendData)
 	} else {
 		fw.key = generateKey()
 		go fw.handleAsyncWrite(fw.storeData)
-		// go func() { fw.asyncWriterResult <- fw.storeData(); close(fw.asyncWriterResult) }()
 	}
 
 	context.GetLoggerWithFields(ctx, map[interface{}]interface{}{
 		"path": fw.path, "append": fw.append,
-		"key": fw.key, "size": fw.size}).Debugf("newFileWriter")
+		"key": fw.key, "size": fw.Size()}).Debugf("newFileWriter")
 
 	return fw, nil
 }
@@ -544,10 +554,9 @@ func (fw *fileWriter) Write(p []byte) (int, error) {
 		"path": fw.path, "append": fw.append,
 		"key": fw.key, "len": len(p)}).Debugf("Write")
 
-	// nn, err := fw.buff.Write(p)
 	nn, err := fw.wr.Write(p)
-	// fw.size += int64(nn)
 	atomic.AddInt64(&fw.size, int64(nn))
+	bytesWrittenToStorage.Mark(int64(nn))
 	if err != nil {
 		return nn, err
 	}
