@@ -17,6 +17,11 @@
 			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		},
 		{
+			"ImportPath": "github.com/docker/distribution/registry/auth",
+			"Comment": "v2.4.1",
+			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
+		},
+		{
 			"ImportPath": "github.com/docker/distribution/registry/storage/driver",
 			"Comment": "v2.4.1-rc.2",
 			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
@@ -64,6 +69,10 @@
 			"Rev": "482a9fd5fa83e8c4e7817413b80f3eb8feec03ef"
 		},
 		{
+			"ImportPath": "github.com/noxiouz/expvarmetrics",
+			"Rev": "0a98b86fa4a7be39008e41a29c3bd7122e3fe9fc"
+		},
+		{
 			"ImportPath": "github.com/noxiouz/go-postgresql-cluster/pgcluster",
 			"Rev": "44c76f664d3d2a4e7340f1a7e24e9962eeac7b57"
 		},
@@ -77,37 +86,16 @@
 			"Rev": "c55201b036063326c5b1b89ccfe45a184973d073"
 		},
 		{
+			"ImportPath": "github.com/rcrowley/go-metrics",
+			"Rev": "eeba7bd0dd01ace6e690fa833b3f22aaec29af43"
+		},
+		{
 			"ImportPath": "golang.org/x/net/context",
 			"Rev": "4876518f9e71663000c348837735820161a42df7"
 		},
 		{
 			"ImportPath": "gopkg.in/check.v1",
 			"Rev": "64131543e7896d5bcc6bd5a76287eb75ea96c673"
-		},
-		{
-			"ImportPath": "github.com/docker/distribution/vendor/github.com/Sirupsen/logrus",
-			"Comment": "v2.4.1-rc.2",
-			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
-		},
-		{
-			"ImportPath": "github.com/docker/distribution/vendor/github.com/gorilla/mux",
-			"Comment": "v2.4.1-rc.2",
-			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
-		},
-		{
-			"ImportPath": "github.com/docker/distribution/vendor/golang.org/x/net/context",
-			"Comment": "v2.4.1-rc.2",
-			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
-		},
-		{
-			"ImportPath": "github.com/docker/distribution/vendor/github.com/gorilla/context",
-			"Comment": "v2.4.1-rc.2",
-			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
-		},
-		{
-			"ImportPath": "github.com/docker/distribution/vendor/gopkg.in/check.v1",
-			"Comment": "v2.4.1-rc.2",
-			"Rev": "03efb43768979f4d2ea5187bef995656441829e5"
 		}
 	]
 }
