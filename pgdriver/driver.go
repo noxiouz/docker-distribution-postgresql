@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/distribution/context"
@@ -461,7 +462,9 @@ type fileWriter struct {
 	context.Context
 	*driver
 
-	buff   *bytes.Buffer
+	rd *io.PipeReader
+	wr *io.PipeWriter
+
 	path   string
 	key    string
 	append bool
@@ -471,16 +474,22 @@ type fileWriter struct {
 	closed    bool
 	committed bool
 	cancelled bool
+
+	asyncWriterResult chan error
 }
 
 func newFileWriter(ctx context.Context, driver *driver, path string, append bool) (storagedriver.FileWriter, error) {
+	rd, wr := io.Pipe()
 	fw := &fileWriter{
 		Context: ctx,
 		driver:  driver,
 
-		buff:   new(bytes.Buffer),
+		rd:     rd,
+		wr:     wr,
 		path:   path,
 		append: append,
+
+		asyncWriterResult: make(chan error, 1),
 	}
 
 	if append {
@@ -501,8 +510,12 @@ func newFileWriter(ctx context.Context, driver *driver, path string, append bool
 		default:
 			return nil, err
 		}
+		// go func() { fw.asyncWriterResult <- fw.appendData(); close(fw.asyncWriterResult) }()
+		go fw.handleAsyncWrite(fw.appendData)
 	} else {
 		fw.key = generateKey()
+		go fw.handleAsyncWrite(fw.storeData)
+		// go func() { fw.asyncWriterResult <- fw.storeData(); close(fw.asyncWriterResult) }()
 	}
 
 	context.GetLoggerWithFields(ctx, map[interface{}]interface{}{
@@ -510,6 +523,12 @@ func newFileWriter(ctx context.Context, driver *driver, path string, append bool
 		"key": fw.key, "size": fw.size}).Debugf("newFileWriter")
 
 	return fw, nil
+}
+
+func (fw *fileWriter) handleAsyncWrite(fn func() error) {
+	err := fn()
+	fw.asyncWriterResult <- err
+	close(fw.asyncWriterResult)
 }
 
 func (fw *fileWriter) Write(p []byte) (int, error) {
@@ -525,8 +544,10 @@ func (fw *fileWriter) Write(p []byte) (int, error) {
 		"path": fw.path, "append": fw.append,
 		"key": fw.key, "len": len(p)}).Debugf("Write")
 
-	nn, err := fw.buff.Write(p)
-	fw.size += int64(nn)
+	// nn, err := fw.buff.Write(p)
+	nn, err := fw.wr.Write(p)
+	// fw.size += int64(nn)
+	atomic.AddInt64(&fw.size, int64(nn))
 	if err != nil {
 		return nn, err
 	}
@@ -540,21 +561,17 @@ func (fw *fileWriter) Close() error {
 	}
 
 	fw.closed = true
-
-	if !fw.committed {
-		if fw.append {
-			return fw.appendData()
-		}
-
-		return fw.storeData()
+	fw.wr.Close()
+	// the chan may be closed, but error is nil anyway in this case
+	if err := <-fw.asyncWriterResult; err != nil {
+		return err
 	}
-
 	return nil
 }
 
 // Size returns the number of bytes written to this FileWriter.
 func (fw *fileWriter) Size() int64 {
-	return fw.size
+	return atomic.LoadInt64(&fw.size)
 }
 
 // Cancel removes any written content from this FileWriter.
@@ -563,19 +580,19 @@ func (fw *fileWriter) Cancel() error {
 		return fmt.Errorf("already closed")
 	}
 	fw.cancelled = true
+	fw.wr.CloseWithError(fmt.Errorf("cancelled"))
 
 	return nil
 }
 
 func (fw *fileWriter) appendData() error {
 	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
-		"path": fw.path, "append": fw.append,
-		"key": fw.key, "len": fw.buff.Len()}).Debugf("appendData")
+		"path": fw.path, "append": fw.append, "key": fw.key}).Debugf("appendData")
 
-	_, err := fw.driver.storage.Append(fw.Context, fw.key, fw.buff)
+	_, err := fw.driver.storage.Append(fw.Context, fw.key, fw.rd)
 	switch err {
 	case nil:
-		result, err := fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.size, fw.path)
+		result, err := fw.driver.cluster.DB(pgcluster.MASTER).Exec("UPDATE mfs SET size = $1 WHERE (path = $2)", fw.Size(), fw.path)
 		if err != nil {
 			return err
 		}
@@ -584,13 +601,13 @@ func (fw *fileWriter) appendData() error {
 		if err != nil {
 			context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
 				"path": fw.path, "append": fw.append,
-				"key": fw.key, "len": fw.buff.Len()}).Errorf("result.RowsAffected(): %v", err)
+				"key": fw.key}).Errorf("result.RowsAffected(): %v", err)
 		}
 
 		if affected != 1 {
 			context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
 				"path": fw.path, "append": fw.append,
-				"key": fw.key, "len": fw.buff.Len()}).Errorf("UPDATE mfs must affect 1 row: affected %d", affected)
+				"key": fw.key}).Errorf("UPDATE mfs must affect 1 row: affected %d", affected)
 			return fmt.Errorf("UPDATE metaInfo error: invalid affected rows count")
 		}
 
@@ -601,11 +618,8 @@ func (fw *fileWriter) appendData() error {
 }
 
 func (fw *fileWriter) storeData() error {
-	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{
-		"path": fw.path, "append": fw.append,
-		"key": fw.key, "len": fw.buff.Len()}).Debugf("storeData")
-
-	if _, err := fw.driver.storage.Store(fw.Context, fw.key, fw.buff); err != nil {
+	context.GetLoggerWithFields(fw.Context, map[interface{}]interface{}{"path": fw.path, "append": fw.append, "key": fw.key}).Debugf("storeData")
+	if _, err := fw.driver.storage.Store(fw.Context, fw.key, fw.rd); err != nil {
 		return err
 	}
 
@@ -634,7 +648,7 @@ func (fw *fileWriter) storeData() error {
 
 	// NOTE: may be update would be useful
 	// NOTE: calculate size properly
-	if _, err = tx.Exec(insertMetaAboutFileOrDir, fw.path, filepath.Dir(fw.path), false, fw.size, fw.key, owner); err != nil {
+	if _, err = tx.Exec(insertMetaAboutFileOrDir, fw.path, filepath.Dir(fw.path), false, fw.Size(), fw.key, owner); err != nil {
 		return err
 	}
 
@@ -685,13 +699,9 @@ func (fw *fileWriter) Commit() error {
 	}
 
 	fw.committed = true
-	// NOTE: right now writting with offset is not supported by MDS, so there's no point to implemnet it now.
-	// It could be added to testing backend, but it should UPDATE if key already exist and insert if it does not.
-	if fw.append {
-		return fw.appendData()
-	}
-
-	if err := fw.storeData(); err != nil {
+	fw.wr.Close()
+	// the chan may be closed, but error is nil anyway
+	if err := <-fw.asyncWriterResult; err != nil {
 		return err
 	}
 
