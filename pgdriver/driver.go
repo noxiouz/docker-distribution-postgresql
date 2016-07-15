@@ -145,6 +145,8 @@ func pgdriverNew(cfg *postgreDriverConfig) (*Driver, error) {
 		st, err = newInMemory()
 	case "mds":
 		st, err = newMDSBinStorage(cluster, cfg.Options)
+	case "elliptics":
+		st, err = newEllipticsKVStorage(cfg.Options)
 	default:
 		cluster.Close()
 		return nil, fmt.Errorf("Unsupported binary storage backend %s", cfg.Type)
