@@ -1,12 +1,12 @@
 package pgdriver
 
 import (
-	"errors"
 	"io"
 
 	"github.com/docker/distribution/context"
 )
 
+// KVStorage is an abstraction on top of any Key/Value storage
 type KVStorage interface {
 	Store(ctx context.Context, key string, data io.Reader) (int64, error)
 	Append(ctx context.Context, key string, data io.Reader) (int64, error)
@@ -14,9 +14,3 @@ type KVStorage interface {
 	Delete(ctx context.Context, key string) error
 	URLFor(ctx context.Context, key string) (string, error)
 }
-
-var (
-	// ErrAppendUnsupported means that a BinaryStorage implementation
-	// does not support write with non-zero offset (append)
-	ErrAppendUnsupported = errors.New("append is not supported")
-)
