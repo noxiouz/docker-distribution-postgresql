@@ -118,6 +118,7 @@ func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
 	_, err = m.DB(pgcluster.MASTER).Exec("UPDATE mds SET deleted = true WHERE (key = $1)", key)
 	if err != nil {
 		context.GetLogger(ctx).Errorf("update metainfo about deleted key %s error: %v", key, err)
+		return err
 	}
 
 	return nil
