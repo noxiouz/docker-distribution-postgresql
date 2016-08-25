@@ -440,6 +440,9 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 			}
 		}
 	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 
 	for _, key := range deleted {
 		if err := d.storage.Delete(ctx, key); err != nil {
@@ -448,7 +451,7 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 	}
 
 	// TODO: mark fields in MDS table before commit from `deleted` array
-	return tx.Commit()
+	return nil
 }
 
 // URLFor returns a URL which may be used to retrieve the content stored at
