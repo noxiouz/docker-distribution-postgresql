@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
+	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/docker/distribution/context"
 
@@ -56,7 +59,21 @@ func newMDSBinStorage(cluster *pgcluster.Cluster, parameters map[string]interfac
 	if err := decodeConfig(parameters, &config); err != nil {
 		return nil, err
 	}
-	mdsClient, err := mds.NewClient(config.Config)
+
+	tr := &http.Transport{
+		// TODO: make it configurable
+		Dial: func(network, addr string) (net.Conn, error) {
+			d := net.Dialer{
+				DualStack: true,
+				Timeout:   time.Second * 3,
+			}
+			return d.Dial(network, addr)
+		},
+		// This value is set according to the current amount of DB Idle conns
+		MaxIdleConnsPerHost: 10,
+	}
+
+	mdsClient, err := mds.NewClient(config.Config, &http.Client{Transport: tr})
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +86,11 @@ func newMDSBinStorage(cluster *pgcluster.Cluster, parameters map[string]interfac
 }
 
 func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (int64, error) {
-	uinfo, err := m.Storage.Upload(m.Namespace, key, ioutil.NopCloser(data))
+	return m.store(ctx, key, data, getContentLength(ctx))
+}
+
+func (m *mdsBinStorage) store(ctx context.Context, key string, data io.Reader, size int64) (int64, error) {
+	uinfo, err := m.Storage.Upload(ctx, m.Namespace, key, size, ioutil.NopCloser(data))
 	if err != nil {
 		return 0, err
 	}
@@ -82,7 +103,7 @@ func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (
 
 	_, err = m.DB(pgcluster.MASTER).Exec("INSERT INTO mds (key, mdsfileinfo) VALUES ($1, $2)", key, meta)
 	if err != nil {
-		if mdserr := m.Storage.Delete(m.Namespace, uinfo.Key); mdserr != nil {
+		if mdserr := m.Storage.Delete(ctx, m.Namespace, uinfo.Key); mdserr != nil {
 			context.GetLoggerWithFields(ctx, map[interface{}]interface{}{"error": mdserr, "key": uinfo.Key}).Error("can not clean MDS after DB error")
 		}
 		return 0, err
@@ -101,7 +122,7 @@ func (m *mdsBinStorage) Get(ctx context.Context, key string, offset int64) (io.R
 		return ioutil.NopCloser(bytes.NewReader(make([]byte, 0))), nil
 	}
 
-	return m.Storage.Get(m.Namespace, metainfo.Key, uint64(offset))
+	return m.Storage.Get(ctx, m.Namespace, metainfo.Key, uint64(offset))
 }
 
 func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
@@ -110,7 +131,7 @@ func (m *mdsBinStorage) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
-	if err = m.Storage.Delete(m.Namespace, metainfo.Key); err != nil {
+	if err = m.Storage.Delete(ctx, m.Namespace, metainfo.Key); err != nil {
 		return err
 	}
 
@@ -130,17 +151,24 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 	case storagedriver.PathNotFoundError:
 		return m.Store(ctx, key, data)
 	case nil:
+		var body []byte
+		size := getContentLength(ctx)
 		// NOTE: Append to a file is NOT expected to be used in MDS,
 		// but noresumable tag does not work in distribution
-		context.GetLogger(ctx).Errorf("Append via Read/Delete is used in MDS for %s %v", key, metainfo)
-		body, err := m.Storage.GetFile(m.Namespace, metainfo.Key)
+		context.GetLogger(ctx).Warnf("Append via Read/Delete is ineffective in MDS: %d %s %v", size, key, metainfo)
+		body, err = m.Storage.GetFile(ctx, m.Namespace, metainfo.Key)
 		if err != nil {
 			context.GetLogger(ctx).Errorf("Unable to read MDS File %s: %v", metainfo.Key, err)
 			return 0, err
 		}
 
+		// In case we have no request in a context
+		if size > 0 {
+			size += int64(len(body))
+		}
+
 		mr := io.MultiReader(bytes.NewReader(body), data)
-		if err = m.Storage.Delete(m.Namespace, metainfo.Key); err != nil {
+		if err = m.Storage.Delete(ctx, m.Namespace, metainfo.Key); err != nil {
 			context.GetLogger(ctx).Errorf("Unable to delete from MDS %s: %v", metainfo.Key, err)
 			return 0, err
 		}
@@ -150,7 +178,7 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 			context.GetLogger(ctx).Errorf("delete metainfo about key %s error: %v", key, err)
 		}
 
-		return m.Store(ctx, key, mr)
+		return m.store(ctx, key, mr, size)
 	default:
 		return 0, err
 	}
@@ -176,4 +204,14 @@ func (m *mdsBinStorage) getMDSMetaInfo(ctx context.Context, key string) (*metaIn
 	default:
 		return nil, err
 	}
+}
+
+func getContentLength(ctx context.Context) int64 {
+	req, err := context.GetRequest(ctx)
+	if err != nil {
+		context.GetLogger(ctx).Warnf("unable to find out ContentLength: %v", err)
+		return 0
+	}
+	context.GetLogger(ctx).Infof("request.ContentLength: %d", req.ContentLength)
+	return req.ContentLength
 }
