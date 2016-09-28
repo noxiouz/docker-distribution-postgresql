@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+
+	"golang.org/x/net/context"
 )
 
 // UploadInfo describes result of upload
@@ -58,12 +60,20 @@ type Config struct {
 // Client works with MDS
 type Client struct {
 	Config
+
+	client *http.Client
 }
 
 // NewClient creates a client to MDS
-func NewClient(config Config) (*Client, error) {
+func NewClient(config Config, client *http.Client) (*Client, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+
 	return &Client{
 		Config: config,
+
+		client: client,
 	}, nil
 }
 
@@ -71,7 +81,7 @@ func (m *Client) uploadURL(namespace, filename string) string {
 	return fmt.Sprintf("http://%s:%d/upload-%s/%s", m.Host, m.UploadPort, namespace, filename)
 }
 
-// ReadURL returns an URL which could be used to get data
+// ReadURL returns a URL which could be used to get data.
 func (m *Client) ReadURL(namespace, filename string) string {
 	return fmt.Sprintf("http://%s:%d/get-%s/%s", m.Host, m.ReadPort, namespace, filename)
 }
@@ -89,28 +99,29 @@ func (m *Client) downloadinfoURL(namespace, filename string) string {
 }
 
 // Upload stores provided data to a specified namespace. Returns information about upload.
-func (m *Client) Upload(namespace string, filename string, body io.ReadCloser) (*UploadInfo, error) {
+func (m *Client) Upload(ctx context.Context, namespace string, filename string, size int64, body io.Reader) (*UploadInfo, error) {
 	urlStr := m.uploadURL(namespace, filename)
 	req, err := http.NewRequest("POST", urlStr, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
+	if req.ContentLength <= 0 {
+		req.ContentLength = size
+	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	switch resp.StatusCode {
-	case http.StatusForbidden:
-		return nil, fmt.Errorf("[%s] Update is prohibited for your namespace", resp.Status)
-	case 507: // 507 Insufficient Storage
-		return nil, fmt.Errorf("[%s] No space left in storage", resp.Status)
-	case http.StatusOK:
-	default:
-		return nil, fmt.Errorf("[%s]", resp.Status)
+	if resp.StatusCode != http.StatusOK {
+		scope := ErrorMethodScope{
+			Method: "upload",
+			URL:    urlStr,
+		}
+		return nil, newMethodError(scope, resp)
 	}
 
 	var info UploadInfo
@@ -122,8 +133,8 @@ func (m *Client) Upload(namespace string, filename string, body io.ReadCloser) (
 }
 
 // Get reads a given key from storage and return ReadCloser to body.
-// User is repsonsible for closing returned ReadCloser
-func (m *Client) Get(namespace, key string, Range ...uint64) (io.ReadCloser, error) {
+// User is responsible for closing returned ReadCloser.
+func (m *Client) Get(ctx context.Context, namespace, key string, Range ...uint64) (io.ReadCloser, error) {
 	urlStr := m.ReadURL(namespace, key)
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
@@ -141,26 +152,26 @@ func (m *Client) Get(namespace, key string, Range ...uint64) (io.ReadCloser, err
 		return nil, fmt.Errorf("Invalid range")
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusPartialContent:
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
 		return resp.Body, nil
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("[%s] No such key", resp.Status)
-	case http.StatusGone, http.StatusNotAcceptable:
-		return nil, fmt.Errorf("[%s] No such namespace", resp.Status)
-	default:
-		return nil, fmt.Errorf("[%s]", resp.Status)
 	}
+
+	defer resp.Body.Close()
+	scope := ErrorMethodScope{
+		Method: "get",
+		URL:    urlStr,
+	}
+	return nil, newMethodError(scope, resp)
 }
 
-// GetFile like Get but returns bytes
-func (m *Client) GetFile(namespace, key string, Range ...uint64) ([]byte, error) {
-	output, err := m.Get(namespace, key, Range...)
+// GetFile is like Get but returns bytes.
+func (m *Client) GetFile(ctx context.Context, namespace, key string, Range ...uint64) ([]byte, error) {
+	output, err := m.Get(ctx, namespace, key, Range...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +180,8 @@ func (m *Client) GetFile(namespace, key string, Range ...uint64) ([]byte, error)
 	return ioutil.ReadAll(output)
 }
 
-// Delete deletes key from na,espace
-func (m *Client) Delete(namespace, key string) error {
+// Delete deletes key from namespace.
+func (m *Client) Delete(ctx context.Context, namespace, key string) error {
 	urlStr := m.deleteURL(namespace, key)
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
@@ -178,47 +189,50 @@ func (m *Client) Delete(namespace, key string) error {
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return nil
-	case http.StatusNotFound:
-		return fmt.Errorf("[%s] No such key", resp.Status)
-	default:
-		return fmt.Errorf("[%s]", resp.Status)
+	if resp.StatusCode != http.StatusOK {
+		scope := ErrorMethodScope{
+			Method: "delete",
+			URL:    urlStr,
+		}
+		return newMethodError(scope, resp)
 	}
+
+	return nil
 }
 
 // Ping checks availability of proxy
-func (m *Client) Ping() error {
+func (m *Client) Ping(ctx context.Context) error {
 	urlStr := m.pingURL()
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return err
 	}
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return nil
-	default:
-		return fmt.Errorf("[%s]", resp.Status)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		scope := ErrorMethodScope{
+			Method: "ping",
+			URL:    urlStr,
+		}
+		return newMethodError(scope, resp)
 	}
+	return nil
 }
 
-// DownloadInfo retrieves an information about direct link to a file
-// if it's available
-func (m *Client) DownloadInfo(namespace, key string) (*DownloadInfo, error) {
+// DownloadInfo retrieves an information about direct link to a file,
+// if it's available.
+func (m *Client) DownloadInfo(ctx context.Context, namespace, key string) (*DownloadInfo, error) {
 	urlStr := m.downloadinfoURL(namespace, key)
 
 	req, err := http.NewRequest("GET", urlStr, nil)
@@ -227,20 +241,18 @@ func (m *Client) DownloadInfo(namespace, key string) (*DownloadInfo, error) {
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	switch resp.StatusCode {
-	case http.StatusGone:
-		return nil, fmt.Errorf("[%s] Seems DownloadInfo is disabled for the namesapce", resp.Status)
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("[%s] No such key", resp.Status)
-	case http.StatusOK:
-	default:
-		return nil, fmt.Errorf("[%s]", resp.Status)
+	if resp.StatusCode != http.StatusOK {
+		scope := ErrorMethodScope{
+			Method: "downloadInfo",
+			URL:    urlStr,
+		}
+		return nil, newMethodError(scope, resp)
 	}
 
 	var info DownloadInfo
