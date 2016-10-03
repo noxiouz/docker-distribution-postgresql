@@ -15,6 +15,7 @@ import (
 
 	"github.com/docker/distribution/context"
 
+	"github.com/noxiouz/expvarmetrics"
 	"github.com/noxiouz/go-postgresql-cluster/pgcluster"
 	"github.com/noxiouz/mds"
 
@@ -168,8 +169,14 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 			size += metainfo.Size
 		}
 
-		// appendTracer is injected to trace the end of proxying
-		mr := io.MultiReader(begining, appendTracer{ctx: ctx, start: time.Now()}, data)
+		mr := io.MultiReader(
+			// trackProxy counts proxied bytes
+			io.TeeReader(begining, trackProxy{}),
+			// appendTracer is injected to trace the end of proxying
+			appendTracer{ctx: ctx, start: time.Now()},
+			// actual data
+			data)
+
 		var (
 			uinfo  *mds.UploadInfo
 			newKey = generateKey()
@@ -234,6 +241,19 @@ func getContentLength(ctx context.Context) int64 {
 	}
 	context.GetLogger(ctx).Infof("request.ContentLength: %d", req.ContentLength)
 	return req.ContentLength
+}
+
+// NOTE: utils to track the uploading process
+
+var bytesProxiedInAppend = expvarmetrics.NewMeterVar()
+
+// trackProxy is injected to count how many bytes have been proxied
+// inside append
+type trackProxy struct{}
+
+func (trackProxy) Write(p []byte) (int, error) {
+	bytesProxiedInAppend.Mark(int64(len(p)))
+	return 0, nil
 }
 
 // trackAppend is injected into MultiReader in Append to log

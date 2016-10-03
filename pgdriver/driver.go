@@ -47,6 +47,10 @@ func init() {
 	// I don't want to do any `test and set` magic
 	metrics := expvar.NewMap("postgres_driver")
 	metrics.Set("bytes_written", bytesWrittenToStorage)
+
+	// TODO: move to MDS init
+	// an MDS metric
+	metrics.Set("bytes_proxied_in_mds_append", bytesProxiedInAppend)
 }
 
 var (
