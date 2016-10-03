@@ -90,7 +90,7 @@ func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (
 }
 
 func (m *mdsBinStorage) store(ctx context.Context, key string, data io.Reader, size int64) (int64, error) {
-	uinfo, err := m.Storage.Upload(ctx, m.Namespace, key, size, ioutil.NopCloser(data))
+	uinfo, err := m.Storage.Upload(ctx, m.Namespace, key, size, data)
 	if err != nil {
 		return 0, err
 	}
@@ -151,34 +151,53 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 	case storagedriver.PathNotFoundError:
 		return m.Store(ctx, key, data)
 	case nil:
-		var body []byte
 		size := getContentLength(ctx)
 		// NOTE: Append to a file is NOT expected to be used in MDS,
 		// but noresumable tag does not work in distribution
 		context.GetLogger(ctx).Warnf("Append via Read/Delete is ineffective in MDS: %d %s %v", size, key, metainfo)
-		body, err = m.Storage.GetFile(ctx, m.Namespace, metainfo.Key)
+		var begining io.ReadCloser
+		begining, err = m.Storage.Get(ctx, m.Namespace, metainfo.Key)
 		if err != nil {
 			context.GetLogger(ctx).Errorf("Unable to read MDS File %s: %v", metainfo.Key, err)
 			return 0, err
 		}
+		defer begining.Close()
 
 		// In case we have no request in a context
 		if size > 0 {
-			size += int64(len(body))
+			size += metainfo.Size
 		}
 
-		mr := io.MultiReader(bytes.NewReader(body), data)
-		if err = m.Storage.Delete(ctx, m.Namespace, metainfo.Key); err != nil {
-			context.GetLogger(ctx).Errorf("Unable to delete from MDS %s: %v", metainfo.Key, err)
+		mr := io.MultiReader(begining, data)
+		var (
+			uinfo  *mds.UploadInfo
+			newKey = generateKey()
+		)
+
+		uinfo, err = m.Storage.Upload(ctx, m.Namespace, newKey, size, mr)
+		if err != nil {
 			return 0, err
 		}
 
-		_, err = m.DB(pgcluster.MASTER).Exec("DELETE FROM mds WHERE (key = $1)", key)
-		if err != nil {
-			context.GetLogger(ctx).Errorf("delete metainfo about key %s error: %v", key, err)
+		var newMeta = &metaInfo{
+			Key:  uinfo.Key,
+			Size: int64(uinfo.Size),
+			ID:   uinfo.ID,
 		}
 
-		return m.store(ctx, key, mr, size)
+		// Set new metainfo for an old key
+		_, err = m.DB(pgcluster.MASTER).Exec("UPDATE mds SET mdsfileinfo = $1 WHERE (key = $2)", newMeta, key)
+		if err != nil {
+			context.GetLogger(ctx).Errorf("update metainfo about deleted key %s error: %v", key, err)
+			return 0, err
+		}
+
+		// Try to clean MDS
+		if err = m.Storage.Delete(ctx, m.Namespace, metainfo.Key); err != nil {
+			context.GetLogger(ctx).Errorf("Unable to delete from MDS %s: %v", metainfo.Key, err)
+		}
+
+		return newMeta.Size, nil
 	default:
 		return 0, err
 	}
