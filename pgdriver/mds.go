@@ -168,7 +168,8 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 			size += metainfo.Size
 		}
 
-		mr := io.MultiReader(begining, data)
+		// appendTracer is injected to trace the end of proxying
+		mr := io.MultiReader(begining, appendTracer{ctx: ctx, start: time.Now()}, data)
 		var (
 			uinfo  *mds.UploadInfo
 			newKey = generateKey()
@@ -233,4 +234,16 @@ func getContentLength(ctx context.Context) int64 {
 	}
 	context.GetLogger(ctx).Infof("request.ContentLength: %d", req.ContentLength)
 	return req.ContentLength
+}
+
+// trackAppend is injected into MultiReader in Append to log
+// when the proxying is done
+type appendTracer struct {
+	ctx   context.Context
+	start time.Time
+}
+
+func (t appendTracer) Read([]byte) (int, error) {
+	context.GetLogger(t.ctx).Infof("an appended key has been proxied for %v", time.Now().Sub(t.start))
+	return 0, io.EOF
 }
