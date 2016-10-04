@@ -30,6 +30,8 @@ const (
 	driverName    = "postgres"
 
 	tableMeta = "mfs"
+
+	contentSize = "pgdriver_content_size"
 )
 
 const (
@@ -61,8 +63,32 @@ func generateKey() string {
 	return uuid.NewRandom().String()
 }
 
+func getContentSize(ctx context.Context) int64 {
+	if size, ok := ctx.Value(contentSize).(int64); ok {
+		return size
+	}
+	return 0
+}
+
+func setContentSize(ctx context.Context, size int64) context.Context {
+	if ctx.Value(contentSize) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, contentSize, size)
+}
+
 func isRoot(path string) bool {
 	return path == "/"
+}
+
+func getContentLength(ctx context.Context) int64 {
+	req, err := context.GetRequest(ctx)
+	if err != nil {
+		context.GetLogger(ctx).Warnf("unable to find out ContentLength: %v", err)
+		return 0
+	}
+	context.GetLogger(ctx).Infof("request.ContentLength: %d", req.ContentLength)
+	return req.ContentLength
 }
 
 type postgreDriverConfig struct {
@@ -220,6 +246,7 @@ func (d *driver) getKey(ctx context.Context, db rowQuerier, path string) (string
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *driver) PutContent(ctx context.Context, path string, content []byte) error {
+	ctx = setContentSize(ctx, int64(len(content)))
 	writer, err := d.Writer(ctx, path, false)
 	if err != nil {
 		return err
@@ -236,6 +263,7 @@ func (d *driver) PutContent(ctx context.Context, path string, content []byte) er
 // Writer returns a FileWriter which will store the content written to it
 // at the location designated by "path" after the call to Commit.
 func (d *driver) Writer(ctx context.Context, path string, append bool) (storagedriver.FileWriter, error) {
+	ctx = setContentSize(ctx, getContentLength(ctx))
 	return newFileWriter(ctx, d, path, append)
 }
 

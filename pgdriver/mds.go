@@ -87,7 +87,7 @@ func newMDSBinStorage(cluster *pgcluster.Cluster, parameters map[string]interfac
 }
 
 func (m *mdsBinStorage) Store(ctx context.Context, key string, data io.Reader) (int64, error) {
-	return m.store(ctx, key, data, getContentLength(ctx))
+	return m.store(ctx, key, data, getContentSize(ctx))
 }
 
 func (m *mdsBinStorage) store(ctx context.Context, key string, data io.Reader, size int64) (int64, error) {
@@ -152,7 +152,7 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 	case storagedriver.PathNotFoundError:
 		return m.Store(ctx, key, data)
 	case nil:
-		size := getContentLength(ctx)
+		size := getContentSize(ctx)
 		// NOTE: Append to a file is NOT expected to be used in MDS,
 		// but noresumable tag does not work in distribution
 		context.GetLogger(ctx).Warnf("Append via Read/Delete is ineffective in MDS: %d %s %v", size, key, metainfo)
@@ -231,16 +231,6 @@ func (m *mdsBinStorage) getMDSMetaInfo(ctx context.Context, key string) (*metaIn
 	default:
 		return nil, err
 	}
-}
-
-func getContentLength(ctx context.Context) int64 {
-	req, err := context.GetRequest(ctx)
-	if err != nil {
-		context.GetLogger(ctx).Warnf("unable to find out ContentLength: %v", err)
-		return 0
-	}
-	context.GetLogger(ctx).Infof("request.ContentLength: %d", req.ContentLength)
-	return req.ContentLength
 }
 
 // NOTE: utils to track the uploading process
