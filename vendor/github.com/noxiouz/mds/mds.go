@@ -6,8 +6,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"golang.org/x/net/context"
+	"golang.org/x/net/context/ctxhttp"
 )
 
 // UploadInfo describes result of upload
@@ -70,6 +72,10 @@ func NewClient(config Config, client *http.Client) (*Client, error) {
 		client = http.DefaultClient
 	}
 
+	if !(strings.HasPrefix(config.Host, "http://") || strings.HasPrefix(config.Host, "https://")) {
+		config.Host = "http://" + config.Host
+	}
+
 	return &Client{
 		Config: config,
 
@@ -78,24 +84,77 @@ func NewClient(config Config, client *http.Client) (*Client, error) {
 }
 
 func (m *Client) uploadURL(namespace, filename string) string {
-	return fmt.Sprintf("http://%s:%d/upload-%s/%s", m.Host, m.UploadPort, namespace, filename)
+	return fmt.Sprintf("%s:%d/upload-%s/%s", m.Host, m.UploadPort, namespace, filename)
 }
 
 // ReadURL returns a URL which could be used to get data.
-func (m *Client) ReadURL(namespace, filename string) string {
-	return fmt.Sprintf("http://%s:%d/get-%s/%s", m.Host, m.ReadPort, namespace, filename)
+func (m *Client) ReadURL(namespace, filename string, resolveRedirect bool) (string, error) {
+
+	if !resolveRedirect {
+		return fmt.Sprintf("%s:%d/get-%s/%s", m.Host, m.ReadPort, namespace, filename), nil
+	}
+
+	url := fmt.Sprintf("%s:%d/get-%s/%s?redirect=yes", m.Host, m.ReadPort, namespace, filename)
+	req, err := m.client.Head(url)
+	if err != nil {
+		return "", err
+	}
+	defer req.Body.Close()
+
+	switch req.StatusCode {
+	// 301, 302, 307, 308
+	case http.StatusTemporaryRedirect, http.StatusMovedPermanently,
+		http.StatusFound, http.StatusPermanentRedirect:
+		lv := req.Header.Get("Location")
+		if lv == "" {
+			return "", http.ErrNoLocation
+		}
+		return lv, nil
+	default:
+		return "", fmt.Errorf("unexpected code for resolving redirect %d", req.StatusCode)
+	}
 }
 
 func (m *Client) deleteURL(namespace, filename string) string {
-	return fmt.Sprintf("http://%s:%d/delete-%s/%s", m.Host, m.UploadPort, namespace, filename)
+	return fmt.Sprintf("%s:%d/delete-%s/%s", m.Host, m.UploadPort, namespace, filename)
 }
 
 func (m *Client) pingURL() string {
-	return fmt.Sprintf("http://%s:%d/ping", m.Host, m.ReadPort)
+	return fmt.Sprintf("%s:%d/ping", m.Host, m.ReadPort)
 }
 
 func (m *Client) downloadinfoURL(namespace, filename string) string {
-	return fmt.Sprintf("http://%s:%d/downloadinfo-%s/%s", m.Host, m.ReadPort, namespace, filename)
+	return fmt.Sprintf("%s:%d/downloadinfo-%s/%s", m.Host, m.ReadPort, namespace, filename)
+}
+
+func (m *Client) getRealURL() string {
+	return fmt.Sprintf("%s:%d/hostname", m.Host, m.UploadPort)
+}
+
+func (m *Client) GetReal(ctx context.Context) (string, error) {
+	urlStr := m.getRealURL()
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Add("Authorization", m.AuthHeader)
+
+	resp, err := ctxhttp.Do(ctx, m.client, req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		b, err := ioutil.ReadAll(resp.Body)
+		return string(b), err
+	}
+
+	scope := ErrorMethodScope{
+		Method: "getReal",
+		URL:    urlStr,
+	}
+	return "", newMethodError(scope, resp)
 }
 
 // Upload stores provided data to a specified namespace. Returns information about upload.
@@ -110,7 +169,7 @@ func (m *Client) Upload(ctx context.Context, namespace string, filename string, 
 		req.ContentLength = size
 	}
 
-	resp, err := m.client.Do(req)
+	resp, err := ctxhttp.Do(ctx, m.client, req)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +194,10 @@ func (m *Client) Upload(ctx context.Context, namespace string, filename string, 
 // Get reads a given key from storage and return ReadCloser to body.
 // User is responsible for closing returned ReadCloser.
 func (m *Client) Get(ctx context.Context, namespace, key string, Range ...uint64) (io.ReadCloser, error) {
-	urlStr := m.ReadURL(namespace, key)
+	urlStr, err := m.ReadURL(namespace, key, false)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return nil, err
@@ -152,7 +214,7 @@ func (m *Client) Get(ctx context.Context, namespace, key string, Range ...uint64
 		return nil, fmt.Errorf("Invalid range")
 	}
 
-	resp, err := m.client.Do(req)
+	resp, err := ctxhttp.Do(ctx, m.client, req)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +251,7 @@ func (m *Client) Delete(ctx context.Context, namespace, key string) error {
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
 
-	resp, err := m.client.Do(req)
+	resp, err := ctxhttp.Do(ctx, m.client, req)
 	if err != nil {
 		return err
 	}
@@ -214,7 +276,7 @@ func (m *Client) Ping(ctx context.Context) error {
 		return err
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
-	resp, err := m.client.Do(req)
+	resp, err := ctxhttp.Do(ctx, m.client, req)
 	if err != nil {
 		return err
 	}
@@ -241,7 +303,7 @@ func (m *Client) DownloadInfo(ctx context.Context, namespace, key string) (*Down
 	}
 	req.Header.Add("Authorization", m.AuthHeader)
 
-	resp, err := m.client.Do(req)
+	resp, err := ctxhttp.Do(ctx, m.client, req)
 	if err != nil {
 		return nil, err
 	}

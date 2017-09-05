@@ -211,13 +211,13 @@ func (m *mdsBinStorage) Append(ctx context.Context, key string, data io.Reader) 
 	}
 }
 
-func (m *mdsBinStorage) URLFor(ctx context.Context, key string) (string, error) {
+func (m *mdsBinStorage) URLFor(ctx context.Context, key string, resolveRedirect bool) (string, error) {
 	metainfo, err := m.getMDSMetaInfo(ctx, key)
 	if err != nil {
 		return "", err
 	}
 
-	return m.Storage.ReadURL(m.Namespace, metainfo.Key), nil
+	return m.Storage.ReadURL(m.Namespace, metainfo.Key, resolveRedirect)
 }
 
 func (m *mdsBinStorage) getMDSMetaInfo(ctx context.Context, key string) (*metaInfo, error) {

@@ -33,7 +33,8 @@ const (
 
 	contentSize = "pgdriver_content_size"
 
-	disableRedirectHeader = "X-Disable-Redirect"
+	disableRedirectHeader  = "X-Disable-Redirect"
+	resolveStorageRedirect = "X-Resolve-Redirect"
 )
 
 const (
@@ -491,12 +492,16 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 // URLFor returns a URL which may be used to retrieve the content stored at
 // the given path, possibly using the given options.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
-	var disableRedirect bool
+	var (
+		disableRedirect bool
+		resolveRedirect bool
+	)
 	if req, err := context.GetRequest(ctx); err == nil {
 		disableRedirect = req.Header.Get(disableRedirectHeader) != ""
 		if disableRedirect {
 			context.GetLogger(ctx).Infof("URLFor disabled via header %s", disableRedirectHeader)
 		}
+		resolveRedirect = req.Header.Get(resolveStorageRedirect) != ""
 	}
 
 	if d.disableURLFor || disableRedirect {
@@ -508,7 +513,7 @@ func (d *driver) URLFor(ctx context.Context, path string, options map[string]int
 		return "", err
 	}
 
-	return d.storage.URLFor(ctx, key)
+	return d.storage.URLFor(ctx, key, resolveRedirect)
 }
 
 // fileWriter provides an abstraction for an opened writable file-like object in
