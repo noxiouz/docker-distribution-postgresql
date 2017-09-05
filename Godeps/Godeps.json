@@ -78,7 +78,7 @@
 		},
 		{
 			"ImportPath": "github.com/noxiouz/mds",
-			"Rev": "0aa136d5e2a1994b93a89329e2aa4fea7f828748"
+			"Rev": "c3c6d4b07f12cb06eab457b7932128e1524abd87"
 		},
 		{
 			"ImportPath": "github.com/pborman/uuid",

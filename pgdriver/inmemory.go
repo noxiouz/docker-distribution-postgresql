@@ -115,7 +115,7 @@ func (i *inmemory) Append(ctx context.Context, key string, data io.Reader) (int6
 	return nn, nil
 }
 
-func (i *inmemory) URLFor(ctx context.Context, key string) (string, error) {
+func (i *inmemory) URLFor(ctx context.Context, key string, _ bool) (string, error) {
 	u, err := url.Parse(i.baseURL)
 	if err != nil {
 		return "", err
