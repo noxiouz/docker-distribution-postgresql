@@ -217,7 +217,7 @@ func (m *mdsBinStorage) URLFor(ctx context.Context, key string, resolveRedirect 
 		return "", err
 	}
 
-	return m.Storage.ReadURL(m.Namespace, metainfo.Key, resolveRedirect)
+	return m.Storage.ReadURL(ctx, m.Namespace, metainfo.Key, resolveRedirect)
 }
 
 func (m *mdsBinStorage) getMDSMetaInfo(ctx context.Context, key string) (*metaInfo, error) {
