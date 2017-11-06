@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/context"
@@ -88,30 +89,38 @@ func (m *Client) uploadURL(namespace, filename string) string {
 }
 
 // ReadURL returns a URL which could be used to get data.
-func (m *Client) ReadURL(namespace, filename string, resolveRedirect bool) (string, error) {
-
+func (m *Client) ReadURL(ctx context.Context, namespace, filename string, resolveRedirect bool) (string, error) {
 	if !resolveRedirect {
 		return fmt.Sprintf("%s:%d/get-%s/%s", m.Host, m.ReadPort, namespace, filename), nil
 	}
 
-	url := fmt.Sprintf("%s:%d/get-%s/%s?redirect=yes", m.Host, m.ReadPort, namespace, filename)
-	req, err := m.client.Head(url)
+	rurl := fmt.Sprintf("%s:%d/get-%s/%s?redirect=yes", m.Host, m.ReadPort, namespace, filename)
+
+	var noRedirectClient = http.Client{
+		Transport: m.client.Transport,
+		Jar:       m.client.Jar,
+		Timeout:   m.client.Timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := ctxhttp.Head(ctx, &noRedirectClient, rurl)
 	if err != nil {
 		return "", err
 	}
-	defer req.Body.Close()
+	defer resp.Body.Close()
 
-	switch req.StatusCode {
-	// 301, 302, 307, 308
-	case http.StatusTemporaryRedirect, http.StatusMovedPermanently,
-		http.StatusFound, http.StatusPermanentRedirect:
-		lv := req.Header.Get("Location")
-		if lv == "" {
-			return "", http.ErrNoLocation
+	switch resp.StatusCode {
+	case 302, 307:
+		var durl *url.URL
+		durl, err = resp.Location()
+		if err != nil {
+			return "", err
 		}
-		return lv, nil
+		return durl.String(), nil
 	default:
-		return "", fmt.Errorf("unexpected code for resolving redirect %d", req.StatusCode)
+		return "", fmt.Errorf("unexpected code for resolving redirect %d", resp.StatusCode)
 	}
 }
 
@@ -194,7 +203,7 @@ func (m *Client) Upload(ctx context.Context, namespace string, filename string, 
 // Get reads a given key from storage and return ReadCloser to body.
 // User is responsible for closing returned ReadCloser.
 func (m *Client) Get(ctx context.Context, namespace, key string, Range ...uint64) (io.ReadCloser, error) {
-	urlStr, err := m.ReadURL(namespace, key, false)
+	urlStr, err := m.ReadURL(ctx, namespace, key, false)
 	if err != nil {
 		return nil, err
 	}
